@@ -1,0 +1,15 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+  <application>
+    <!-- specialUse: держать WebSocket до своего ПК; dataSync на Android 15 ограничен 6 часами в сутки -->
+    <service
+      android:name="dev.kamharn.keepalive.KeepAliveService"
+      android:exported="false"
+      android:foregroundServiceType="specialUse">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="Keeps a WebSocket open to the user's own PC (KamHarn hub) so agent chats stay live while the app is in background" />
+    </service>
+  </application>
+</manifest>

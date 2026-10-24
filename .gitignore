@@ -1,0 +1,22 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+!.env.example
+
+# локальные данные хаба (БД, загруженные файлы)
+data/
+
+# временное
+tmp/*
+!tmp/plans/
+
+# локальный конфиг хаба (создаётся автоматически с дефолтами)
+config/kamharn.json
+
+# ключ сервисного аккаунта Firebase для пушей (секрет)
+config/firebase-service-account.json
+
+# закрытый ключ подписи выпусков KraBness (бэкапить вместе с ключом подписи APK!)
+config/release-signing.pem

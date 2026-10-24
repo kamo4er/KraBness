@@ -1,0 +1,27 @@
+{
+  "name": "kamharn",
+  "version": "0.1.41",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/hub",
+    "apps/web"
+  ],
+  "scripts": {
+    "hub": "npm run start -w @kamharn/hub",
+    "hub:dev": "npm run dev -w @kamharn/hub",
+    "cli": "npm run cli -w @kamharn/hub --",
+    "typecheck": "tsc -p packages/protocol && tsc -p packages/client && tsc -p apps/hub && tsc -p apps/web",
+    "test": "npm test -w @kamharn/protocol && npm test -w @kamharn/hub",
+    "test:integration": "npm run test:integration -w @kamharn/hub",
+    "web:dev": "npm run dev -w @kamharn/web",
+    "web:build": "npm run build -w @kamharn/web"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}
