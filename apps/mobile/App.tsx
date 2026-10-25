@@ -70,11 +70,11 @@ function Root() {
   if (!conn) screen = <Pair />;
   else if (state.conn === "unauthorized") screen = <Pair reason={t("Хаб не принял токен устройства (отключено на ПК?). Подключись заново.", "The hub rejected this device's token (disconnected on the PC?). Connect again.")} />;
   else if (route.page === "session") screen = <Chat key={route.id} id={route.id} />;
-  else if (route.page === "project") screen = <Project key={route.id} id={route.id} />;
+  else if (route.page === "project") screen = <Project key={`${route.id}|${route.file ?? ""}|${route.line ?? ""}`} id={route.id} file={route.file} line={route.line} />;
   else if (route.page === "file") screen = <FileViewer key={route.fileId} {...route} />;
   else if (route.page === "new") screen = <NewSession key={route.group ?? ""} group={route.group} />;
   else if (route.page === "group") screen = <Group key={route.id} id={route.id} />;
-  else if (route.page === "settings") screen = <Settings />;
+  else if (route.page === "settings") screen = <Settings key={route.section ?? ""} section={route.section} />;
   else if (route.page === "providers") screen = <Providers />;
   else if (route.page === "mcp") screen = <Mcp />;
   else if (route.page === "skills") screen = <Skills />;

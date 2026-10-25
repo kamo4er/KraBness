@@ -39,7 +39,7 @@ export function HubUpdateBanner() {
   if (!busy && dismissed === update.latest.version) return null;
   const v = update.latest.version;
   return (
-    <Pressable style={st.banner} onPress={() => go({ page: "settings" })}>
+    <Pressable style={st.banner} onPress={() => go({ page: "settings", section: "updates" })}>
       <View style={{ flex: 1, gap: 2 }}>
         <Text style={S.text}>{t(`Вышел KraBness ${v} для ПК`, `KraBness ${v} for the PC is out`)}</Text>
         <Text style={S.muted} numberOfLines={busy ? 3 : 2}>

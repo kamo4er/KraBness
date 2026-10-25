@@ -20,3 +20,8 @@ config/firebase-service-account.json
 
 # закрытый ключ подписи выпусков KraBness (бэкапить вместе с ключом подписи APK!)
 config/release-signing.pem
+
+# ключ хаба для туннеля «Удалённый доступ через свой сервер»
+config/remote_ed25519
+config/remote_ed25519.pub
+config/remote_known_hosts

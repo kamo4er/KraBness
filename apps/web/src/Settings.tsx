@@ -3,50 +3,116 @@ import QRCode from "qrcode";
 import { t, type AppRelease, type DeviceInfo, type HubInfo, type TelegramProxy, type TelegramStatus } from "@kamharn/client";
 import { client, fmtSize, fmtTime, go, saveQuickPrompts, useHub, useQuickPrompts } from "./hub.ts";
 import { WakeSettings } from "./WakeSettings.tsx";
+import { RemoteSettings } from "./RemoteSettings.tsx";
+import { HubAddresses } from "./HubAddresses.tsx";
 import { EngineSettings } from "./EngineSettings.tsx";
 import { LangSwitch } from "./LangSwitch.tsx";
 import { UpdateSettings } from "./Updates.tsx";
 
-export function Settings() {
+export type SettingsSection = "general" | "agents" | "connect" | "notify" | "computer" | "updates";
+
+/** разделы настроек — функцией: подписи на текущем языке */
+export const SECTIONS = (): { id: SettingsSection; icon: string; title: string; hint: string }[] => [
+  { id: "general", icon: "⚙️", title: t("Общие", "General"), hint: t("Язык, быстрые кнопки, разрешённые папки", "Language, quick buttons, allowed folders") },
+  { id: "agents", icon: "🤖", title: t("Агенты", "Agents"), hint: t("Движки, модели и провайдеры, MCP, скиллы", "Engines, models and providers, MCP, skills") },
+  { id: "connect", icon: "🔗", title: t("Подключение", "Connection"), hint: t("Устройства, адреса хаба, свой сервер", "Devices, hub addresses, your own server") },
+  { id: "notify", icon: "🔔", title: t("Уведомления", "Notifications"), hint: t("Telegram-бот", "Telegram bot") },
+  { id: "computer", icon: "🖥️", title: t("Компьютер", "Computer"), hint: t("Пробуждение ПК, перезапуск хаба, экран", "Waking the PC, restarting the hub, screen") },
+  { id: "updates", icon: "⬆️", title: t("Обновления", "Updates"), hint: t("KraBness и Android-приложение", "KraBness and the Android app") },
+];
+
+/** Без section — список разделов, с section — страница раздела. */
+export function Settings({ section }: { section?: SettingsSection }) {
   const { deviceId } = useHub();
+  const sec = SECTIONS().find((s) => s.id === section);
+  if (!sec) {
+    return (
+      <div className="page">
+        <header className="page__head">
+          <button className="btn btn--icon back" onClick={() => go({ page: "home" })}>
+            ←
+          </button>
+          <h2>{t("Настройки", "Settings")}</h2>
+        </header>
+        <div className="page__body">
+          <ul className="settings-list">
+            {SECTIONS().map((s) => (
+              <li key={s.id}>
+                <button className="settings-list__item" onClick={() => go({ page: "settings", section: s.id })}>
+                  <span className="settings-list__icon">{s.icon}</span>
+                  <span className="settings-list__text">
+                    <b>{s.title}</b>
+                    <span className="muted">{s.hint}</span>
+                  </span>
+                  <span className="settings-list__arrow">›</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="page">
       <header className="page__head">
-        <button className="btn btn--icon back" onClick={() => go({ page: "home" })}>
+        {/* к списку разделов — видна и на широком экране (общая «назад» там скрыта) */}
+        <button className="btn btn--icon" onClick={() => go({ page: "settings" })} title={t("Настройки", "Settings")}>
           ←
         </button>
-        <h2>{t("Настройки", "Settings")}</h2>
+        <h2>
+          {sec.icon} {sec.title}
+        </h2>
       </header>
       <div className="page__body">
-        <LangSwitch />
-        <Roots />
-        <EngineSettings />
-        <section>
-          <h3>{t("Модели", "Models")}</h3>
-          <p className="muted">{t("Подключить OpenAI (в т.ч. подписку ChatGPT), OpenRouter, DeepSeek, Gemini, Kimi, GLM и др. или свой сервер (LM Studio, Ollama).", "Connect OpenAI (including a ChatGPT subscription), OpenRouter, DeepSeek, Gemini, Kimi, GLM and more, or your own server (LM Studio, Ollama).")}</p>
-          <button className="btn" onClick={() => go({ page: "providers" })}>
-            {t("Модели и провайдеры →", "Models and providers →")}
-          </button>
-        </section>
-        <section>
-          <h3>{t("Инструменты агентов", "Agent tools")}</h3>
-          <p className="muted">{t("MCP-серверы (браузер, базы, API) — для Claude и opencode. Скиллы — готовые инструкции и скрипты, их тоже видят оба движка.", "MCP servers (a browser, databases, APIs) — for Claude and opencode. Skills — ready-made instructions and scripts, both engines see them too.")}</p>
-          <div className="row">
-            <button className="btn" onClick={() => go({ page: "mcp" })}>
-              {t("MCP-серверы →", "MCP servers →")}
-            </button>
-            <button className="btn" onClick={() => go({ page: "skills" })}>
-              {t("Скиллы →", "Skills →")}
-            </button>
-          </div>
-        </section>
-        <Telegram />
-        <QuickPrompts />
-        <Devices local={deviceId === "local"} />
-        <WakeSettings />
-        <HubSection />
-        <UpdateSettings />
-        <AppSection />
+        {sec.id === "general" ? (
+          <>
+            <LangSwitch />
+            <QuickPrompts />
+            <Roots />
+          </>
+        ) : sec.id === "agents" ? (
+          <>
+            <EngineSettings />
+            <section>
+              <h3>{t("Модели", "Models")}</h3>
+              <p className="muted">{t("Подключить OpenAI (в т.ч. подписку ChatGPT), OpenRouter, DeepSeek, Gemini, Kimi, GLM и др. или свой сервер (LM Studio, Ollama).", "Connect OpenAI (including a ChatGPT subscription), OpenRouter, DeepSeek, Gemini, Kimi, GLM and more, or your own server (LM Studio, Ollama).")}</p>
+              <button className="btn" onClick={() => go({ page: "providers" })}>
+                {t("Модели и провайдеры →", "Models and providers →")}
+              </button>
+            </section>
+            <section>
+              <h3>{t("Инструменты агентов", "Agent tools")}</h3>
+              <p className="muted">{t("MCP-серверы (браузер, базы, API) — для Claude и opencode. Скиллы — готовые инструкции и скрипты, их тоже видят оба движка.", "MCP servers (a browser, databases, APIs) — for Claude and opencode. Skills — ready-made instructions and scripts, both engines see them too.")}</p>
+              <div className="row">
+                <button className="btn" onClick={() => go({ page: "mcp" })}>
+                  {t("MCP-серверы →", "MCP servers →")}
+                </button>
+                <button className="btn" onClick={() => go({ page: "skills" })}>
+                  {t("Скиллы →", "Skills →")}
+                </button>
+              </div>
+            </section>
+          </>
+        ) : sec.id === "connect" ? (
+          <>
+            <Devices local={deviceId === "local"} />
+            <HubAddresses />
+            <RemoteSettings />
+          </>
+        ) : sec.id === "notify" ? (
+          <Telegram />
+        ) : sec.id === "computer" ? (
+          <>
+            <WakeSettings />
+            <HubSection />
+          </>
+        ) : (
+          <>
+            <UpdateSettings />
+            <AppSection />
+          </>
+        )}
       </div>
     </div>
   );
@@ -281,7 +347,7 @@ function Devices({ local }: { local: boolean }) {
                 </p>
               ))
             ) : (
-              <p className="error">{t("Хаб не слушает Tailscale-адрес — телефон не достучится. Проверь, что Tailscale на ПК подключён, и перезапусти хаб.", "The hub isn't listening on a Tailscale address — the phone can't reach it. Check that Tailscale on the PC is connected and restart the hub.")}</p>
+              <p className="error">{t("У хаба нет адреса для телефона: Tailscale на ПК не подключён, удалённый доступ через свой сервер не настроен (раздел ниже).", "The hub has no address for the phone: Tailscale on the PC isn't connected and remote access via your own server isn't set up (section below).")}</p>
             )}
             <p className="muted">{t("и введи код.", "and enter the code.")}</p>
           </div>

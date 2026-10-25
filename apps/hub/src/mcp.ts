@@ -6,7 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { isAbsolute, resolve } from "node:path";
-import { isLoopback } from "./auth.ts";
+import { isLoopback, tunnelSockets } from "./auth.ts";
 import { FILE_MARKER, type FileStore } from "./files.ts";
 import type { ClaudeEngine } from "./engines/claude.ts";
 import { L } from "./lang.ts";
@@ -72,7 +72,7 @@ function buildServer(deps: McpDeps, scope: string): McpServer {
 
 export function registerMcp(app: FastifyInstance, deps: McpDeps): void {
   app.post<{ Params: { secret: string; scope: string } }>("/mcp/:secret/:scope", async (req, reply) => {
-    if (!isLoopback(req.socket.remoteAddress) || req.params.secret !== deps.secret) {
+    if (!isLoopback(req.socket.remoteAddress) || tunnelSockets.has(req.socket) || req.params.secret !== deps.secret) {
       return reply.code(403).send({ error: "forbidden" });
     }
     const server = buildServer(deps, req.params.scope);

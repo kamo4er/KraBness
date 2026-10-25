@@ -1,15 +1,18 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { limitView, speakableText, type ClaudeLimits, type EngineInfo, type ListeningPort, type WorktreeStatus, type MessageView, type ModelRef, type PermissionMode, type SlashCommand, t, locale } from "@kamharn/client";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { limitView, resolveFileRef, speakableText, type FileRef, type ClaudeLimits, type EngineInfo, type ListeningPort, type WorktreeStatus, type MessageView, type ModelRef, type PermissionMode, type SlashCommand, t, locale } from "@kamharn/client";
 import { client, fmtSize, go, useEngines, useHub, useQuickPrompts } from "./hub.ts";
 import { pickOpencodeModel } from "./ModelPick.tsx";
 import { MODES } from "./NewSession.tsx";
-import { FileChip, Limits, PartView, PermissionCard, QuestionCard } from "./Parts.tsx";
+import { FileChip, FileRefCtx, Limits, PartView, PermissionCard, QuestionCard } from "./Parts.tsx";
 
 export function Chat({ id }: { id: string }) {
   const state = useHub();
   const view = state.views[id];
   const info = state.sessions.find((s) => s.id === id) ?? view?.info;
   const engines = useEngines();
+  // клик по пути к файлу в ответе — просмотр проекта на этом файле (стабильная ссылка: иначе перерисуется весь markdown)
+  const dir = info?.directory;
+  const openRef = useCallback((r: FileRef) => dir && go({ page: "project", id, file: resolveFileRef(r, dir), ...(r.line ? { line: r.line } : {}) }), [id, dir]);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showDown, setShowDown] = useState(false);
@@ -41,6 +44,7 @@ export function Chat({ id }: { id: string }) {
 
   const busy = info.status === "busy" || info.status === "retry";
   return (
+    <FileRefCtx.Provider value={openRef}>
     <div
       className={`chat ${dragging ? "chat--drop" : ""}`}
       // файлы можно бросить в любое место чата
@@ -113,6 +117,7 @@ export function Chat({ id }: { id: string }) {
       {view?.questions.map((q) => <QuestionCard key={q.id} sessionId={id} req={q} />)}
       <Composer sessionId={id} busy={busy} slash={info.engine === "claude"} dropFiles={dropFiles} />
     </div>
+    </FileRefCtx.Provider>
   );
 }
 

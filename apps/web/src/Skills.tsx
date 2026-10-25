@@ -46,7 +46,7 @@ export function Skills() {
   return (
     <div className="page">
       <header className="page__head">
-        <button className="btn btn--icon back" onClick={() => go({ page: "settings" })}>
+        <button className="btn btn--icon back" onClick={() => go({ page: "settings", section: "agents" })}>
           ←
         </button>
         <h2>{t("Скиллы", "Skills")}</h2>

@@ -26,6 +26,8 @@ import { setHubLang } from "./lang.ts";
 import { Skills } from "./skills.ts";
 import { Updates } from "./updates.ts";
 import { ClaudeLogin } from "./claudeauth.ts";
+import { RemoteTunnel } from "./remote.ts";
+import { tunnelSockets } from "./auth.ts";
 import { buildServer } from "./server.ts";
 import { L } from "./lang.ts";
 
@@ -77,6 +79,8 @@ export interface HubOptions {
   updates?: { check?: boolean; api?: string; root?: string };
   /** вход в Claude: тесты подставляют свой адрес Anthropic API и заглушку окна входа */
   claudeLogin?: { api?: string; openTerminal?: (bin: string) => void };
+  /** удалённый доступ через VPS: тесты подставляют свой ssh */
+  remote?: { sshBin?: string; sshPrefix?: string[]; upAfterMs?: number };
 }
 
 export async function createHub(opts: HubOptions = {}): Promise<Hub> {
@@ -159,6 +163,9 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
     log,
   });
   if (opts.updates?.check) updates.start();
+  const remote = new RemoteTunnel({ config, version: VERSION, log, dataDir: cfg.dataDir, ...opts.remote });
+  // свой адрес за прокси (NAS) и на VPS — тоже известные адреса хаба (QR, приложение выбирает рабочий)
+  const allUrls = () => [...urls, ...(config.config.publicUrls ?? []), ...remote.publicUrls()];
   const app = await buildServer({
     sessions, auth, config, db, files, push, presence, previews, terminal, telegram, version: VERSION,
     notices: (cb) => notifier.subscribe(cb),
@@ -166,7 +173,8 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
     skills: opts.skillsDir === null ? undefined : new Skills(opts.skillsDir),
     providers: () => providers,
     ...(opts.screen ? { screen: opts.screen } : {}),
-    urls: () => urls,
+    urls: allUrls,
+    remote,
     startedAt: Date.now(),
     restart: { supervised: !!opts.onRestart, schedule: scheduleRestart },
     updates,
@@ -208,7 +216,15 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
     return srv;
   };
   const extra: Server[] = [];
-  for (const host of hosts.slice(1)) extra.push(await bind(host));
+  for (const host of hosts.slice(1)) {
+    // адреса в домашней сети меняются (DHCP) — пропавший адрес не должен ронять хаб
+    try {
+      extra.push(await bind(host));
+    } catch (e) {
+      log(`${L(`[hub] не удалось слушать ${host}`, `[hub] couldn't listen on ${host}`)}: ${(e as Error).message}`);
+      hosts.splice(hosts.indexOf(host), 1);
+    }
+  }
 
   // Tailscale может подняться (или сменить IP) уже после старта хаба — следим и перепривязываемся
   let ts: { ip: string; srv: Server } | undefined;
@@ -241,6 +257,15 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
     tsTimer.unref();
   }
   refreshUrls();
+
+  // туннель с VPS приходит на свой порт: запросы с него не локальные, даже если адрес 127.0.0.1
+  const tunnelSrv = createServer();
+  tunnelSrv.on("connection", (sock) => tunnelSockets.add(sock));
+  tunnelSrv.on("request", (req, res) => app.server.emit("request", req, res));
+  tunnelSrv.on("upgrade", (req, sock, head) => app.server.emit("upgrade", req, sock, head));
+  await new Promise<void>((res, rej) => tunnelSrv.once("error", rej).listen(0, "127.0.0.1", () => res()));
+  await remote.start((tunnelSrv.address() as { port: number }).port);
+
   localBase = `http://127.0.0.1:${port}`;
   // после listen: просроченный «Продолжай» может уйти сразу, а движкам уже нужен адрес MCP
   autoResume.start();
@@ -278,13 +303,14 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
     files,
     presence,
     get urls() {
-      return urls;
+      return allUrls();
     },
     async close() {
       if (tsTimer) clearInterval(tsTimer);
       if (restartTimer) clearTimeout(restartTimer);
       if (sleepTimer) clearTimeout(sleepTimer);
       updates.close();
+      remote.close();
       autoResume.close();
       terminal.close();
       telegram.close();
@@ -293,7 +319,7 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
       // без принудительного разрыва хаб висел на выключении вечно (и сторож не мог его перезапустить).
       for (const c of app.websocketServer?.clients ?? []) c.terminate();
       await Promise.all(
-        [...extra, ...(ts ? [ts.srv] : [])].map(
+        [...extra, tunnelSrv, ...(ts ? [ts.srv] : [])].map(
           (s) =>
             new Promise((r) => {
               s.close(r);

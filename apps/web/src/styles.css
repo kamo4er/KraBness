@@ -247,6 +247,9 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 .gitdiff__hunk { color: var(--accent); }
 .project__img { max-width: 100%; border-radius: 8px; }
 .project__text { max-height: none; white-space: pre; overflow-x: auto; }
+.project__hl { background: rgba(255, 196, 0, 0.18); outline: 1px solid rgba(255, 196, 0, 0.35); }
+.md .fileref { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.md .fileref:hover { text-decoration-style: solid; }
 
 .limitbanner { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: 0 auto 8px; width: calc(100% - 32px); max-width: 828px; padding: 8px 12px; border-radius: var(--radius); font-size: 13px; }
 .limitbanner--warn { background: #2a2416; border: 1px solid #5a4a20; }
@@ -363,3 +366,11 @@ section .update__notes { margin: 6px 0 10px; }
 .compaction::before, .compaction::after { content: ""; flex: 1; border-top: 1px dashed var(--line); }
 .older { align-self: center; margin: 6px 0 10px; }
 .summary { opacity: 0.9; }
+
+/* настройки: список разделов */
+.settings-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
+.settings-list__item { width: 100%; display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg2); color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.settings-list__item:hover { border-color: var(--accent); }
+.settings-list__icon { font-size: 22px; width: 28px; text-align: center; }
+.settings-list__text { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.settings-list__arrow { font-size: 22px; color: var(--muted); }

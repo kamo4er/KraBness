@@ -1,7 +1,7 @@
 // Части сообщения: текст (упрощённый markdown), размышления, инструменты, файлы, запрос подтверждения.
-import { memo, useEffect, useState, type ReactNode } from "react";
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View } from "react-native";
-import { t, type Part, type PermissionReply, type PermissionRequest, type QuestionAnswers, type QuestionRequest } from "@kamharn/client";
+import { createContext, memo, useContext, useEffect, useState, type ReactNode } from "react";
+import { ActivityIndicator, Image, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View } from "react-native";
+import { parseFileRef, t, type FileRef, type Part, type PermissionReply, type PermissionRequest, type QuestionAnswers, type QuestionRequest } from "@kamharn/client";
 import { client, fmtSize } from "./store.ts";
 import { go } from "./nav.ts";
 import { imageUri, openFile, saveFile, shareFile } from "./files.ts";
@@ -11,31 +11,49 @@ import { dialog } from "./dialog.tsx";
 
 // ---------- markdown: блоки кода, заголовки, списки, `код`, **жирный** ----------
 
-function inline(text: string, keyBase: string): ReactNode[] {
-  return text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g).map((t, i) => {
-    if (t.startsWith("`") && t.endsWith("`") && t.length > 1) return <Text key={keyBase + i} style={md.code}>{t.slice(1, -1)}</Text>;
+/** открыть файл по ссылке из ответа (даёт чат; в просмотре .md-файла ссылок на файлы нет) */
+export const FileRefCtx = createContext<((ref: FileRef) => void) | undefined>(undefined);
+type OpenRef = ((ref: FileRef) => void) | undefined;
+
+/** [текст](адрес): без схемы — путь к файлу, http(s) — открыть в браузере */
+function link(label: string, href: string, key: string, openRef: OpenRef): ReactNode {
+  if (/^https?:\/\//i.test(href)) return <Text key={key} style={md.link} onPress={() => void Linking.openURL(href)}>{label}</Text>;
+  const ref = openRef && !/^[a-z][a-z0-9+.-]*:(?![\\/])/i.test(href.replace(/^[A-Za-z]:/, "")) ? parseFileRef(/[\\/]/.test(href) ? href : `./${href}`) : undefined;
+  return ref ? <Text key={key} style={md.link} onPress={() => openRef!(ref)}>{label}</Text> : label;
+}
+
+function inline(text: string, keyBase: string, openRef: OpenRef): ReactNode[] {
+  return text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^)\s]+\))/g).map((t, i) => {
+    if (t.startsWith("`") && t.endsWith("`") && t.length > 1) {
+      const code = t.slice(1, -1);
+      const ref = openRef ? parseFileRef(code) : undefined;
+      return ref ? <Text key={keyBase + i} style={[md.code, md.fileref]} onPress={() => openRef!(ref)}>{code}</Text> : <Text key={keyBase + i} style={md.code}>{code}</Text>;
+    }
     // внутри жирного тоже бывает `код` (**`src/app.ts`**): разбираем его тем же способом
-    if (t.startsWith("**") && t.endsWith("**") && t.length > 3) return <Text key={keyBase + i} style={md.bold}>{inline(t.slice(2, -2), `${keyBase}${i}b`)}</Text>;
+    if (t.startsWith("**") && t.endsWith("**") && t.length > 3) return <Text key={keyBase + i} style={md.bold}>{inline(t.slice(2, -2), `${keyBase}${i}b`, openRef)}</Text>;
+    const l = /^\[([^\]\n]+)\]\(([^)\s]+)\)$/.exec(t);
+    if (l) return link(l[1]!, l[2]!, keyBase + i, openRef);
     return t;
   });
 }
 
 function TextBlock({ text, k }: { text: string; k: string }) {
+  const openRef = useContext(FileRefCtx);
   const lines = text.replace(/^\n+|\n+$/g, "").split("\n");
   return (
     <>
       {lines.map((line, i) => {
         const h = /^(#{1,6})\s+(.*)$/.exec(line);
-        if (h) return <Text key={k + i} selectable style={[S.text, md.h]}>{inline(h[2]!, k + i)}</Text>;
+        if (h) return <Text key={k + i} selectable style={[S.text, md.h]}>{inline(h[2]!, k + i, openRef)}</Text>;
         const li = /^(\s*)([-*+]|\d+\.)\s+(.*)$/.exec(line);
         if (li) {
           return (
             <Text key={k + i} selectable style={[S.text, { paddingLeft: 8 + li[1]!.length * 4 }]}>
-              {/^\d/.test(li[2]!) ? li[2] : "•"} {inline(li[3]!, k + i)}
+              {/^\d/.test(li[2]!) ? li[2] : "•"} {inline(li[3]!, k + i, openRef)}
             </Text>
           );
         }
-        return <Text key={k + i} selectable style={S.text}>{inline(line, k + i)}</Text>;
+        return <Text key={k + i} selectable style={S.text}>{inline(line, k + i, openRef)}</Text>;
       })}
     </>
   );
@@ -62,6 +80,8 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
 const md = StyleSheet.create({
   wrap: { gap: 6 },
   code: { fontFamily: mono, fontSize: 13, backgroundColor: C.bg3, color: "#f0c674" },
+  fileref: { textDecorationLine: "underline", textDecorationStyle: "dotted" },
+  link: { color: C.accent, textDecorationLine: "underline" },
   bold: { fontWeight: "700" },
   h: { fontWeight: "700", fontSize: 16, marginTop: 4 },
   pre: { backgroundColor: "#0b0d11", borderRadius: 8, borderWidth: 1, borderColor: C.line },

@@ -1,5 +1,5 @@
 // Просмотр проекта сессии без агента: git-изменения и файлы (бесплатно по лимитам).
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ComponentRef } from "react";
 import { BackHandler, FlatList, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Directory, Paths } from "expo-file-system";
 import { ApiError, type FileView, type FsEntry, type GitInfo, t } from "@kamharn/client";
@@ -13,10 +13,10 @@ import { Terminal } from "./Terminal.tsx";
 import { dialog } from "../dialog.tsx";
 import { pickOpencodeModel } from "../modelPick.tsx";
 
-export function Project({ id }: { id: string }) {
+export function Project({ id, file, line }: { id: string; file?: string; line?: number }) {
   const state = useHub();
   const info = state.sessions.find((s) => s.id === id);
-  const [tab, setTab] = useState<"git" | "files" | "term">("git");
+  const [tab, setTab] = useState<"git" | "files" | "term">(file ? "files" : "git");
   if (!info) {
     return (
       <View style={[S.screen, { justifyContent: "center", alignItems: "center" }]}>
@@ -39,7 +39,7 @@ export function Project({ id }: { id: string }) {
           </Pressable>
         ))}
       </View>
-      {tab === "git" ? <Changes id={id} /> : tab === "files" ? <Files root={info.directory} /> : <Terminal sessionId={id} />}
+      {tab === "git" ? <Changes id={id} /> : tab === "files" ? <Files root={info.directory} initial={file} line={line} /> : <Terminal sessionId={id} />}
     </View>
   );
 }
@@ -111,12 +111,30 @@ function Changes({ id }: { id: string }) {
   );
 }
 
-function Files({ root }: { root: string }) {
+/** initial — файл (или папка) по ссылке из чата, line — строка, к которой прокрутить */
+function Files({ root, initial, line }: { root: string; initial?: string; line?: number }) {
   const [cwd, setCwd] = useState(root);
   const [entries, setEntries] = useState<FsEntry[]>();
   const [file, setFile] = useState<FileView>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  // подсвеченная строка — только у файла, открытого по ссылке; codeY — где в прокрутке начинается текст
+  const [hl, setHl] = useState<number>();
+  const scroller = useRef<ComponentRef<typeof ScrollView>>(null);
+  const codeY = useRef(0);
+
+  useEffect(() => {
+    if (!initial || !client) return;
+    client.readFile(initial).then(
+      (f) => {
+        setFile(f);
+        setCwd(f.path.replace(/[\\/][^\\/]+$/, ""));
+        if (line) setHl(line);
+      },
+      // не файл — может, папка: показываем её список
+      (e: Error) => client!.list(initial).then(() => setCwd(initial), () => setError(`${initial}: ${e.message}`)),
+    );
+  }, [initial, line]);
   // правка руками: draft — текст в поле (undefined — просмотр)
   const [draft, setDraft] = useState<string>();
   const [saving, setSaving] = useState(false);
@@ -167,6 +185,7 @@ function Files({ root }: { root: string }) {
 
   async function open(e: FsEntry) {
     if (e.dir) return setCwd(e.path);
+    setHl(undefined);
     try {
       setFile(await client!.readFile(e.path));
     } catch (err) {
@@ -192,9 +211,9 @@ function Files({ root }: { root: string }) {
     const name = file.path.split(/[\\/]/).pop()!;
     return (
       // handled: при открытой клавиатуре первый тап по «Сохранить» иначе только прячет клавиатуру
-      <ScrollView contentContainerStyle={{ padding: 12, gap: 10 }} keyboardShouldPersistTaps="handled">
+      <ScrollView ref={scroller} contentContainerStyle={{ padding: 12, gap: 10 }} keyboardShouldPersistTaps="handled">
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <Btn small title={t("← к списку", "← back to list")} onPress={() => leave(() => (setDraft(undefined), setFile(undefined)))} />
+          <Btn small title={t("← к списку", "← back to list")} onPress={() => leave(() => (setDraft(undefined), setFile(undefined), setHl(undefined)))} />
           <Text style={[S.muted, { flex: 1, fontFamily: mono }]} numberOfLines={1}>
             {name}
             {dirty ? " •" : ""}
@@ -230,6 +249,23 @@ function Files({ root }: { root: string }) {
               <Btn title={t("Открыть", "Open")} busy={busy} onPress={() => void openBinary(file)} style={{ alignSelf: "flex-start" }} />
             </View>
           )
+        ) : hl ? (
+          // ссылка на строку: текст построчно (без переноса — высота строки постоянная), нужная подсвечена
+          <ScrollView
+            horizontal
+            onLayout={(e) => {
+              codeY.current = e.nativeEvent.layout.y;
+              scroller.current?.scrollTo({ y: Math.max(0, codeY.current + (hl - 1) * CODE_LINE - 200), animated: false });
+            }}
+          >
+            <View>
+              {(file.text ?? "").split(/\r?\n/).map((l, i) => (
+                <Text key={i} selectable style={[st.code, i + 1 === hl && st.hl]}>
+                  {l || " "}
+                </Text>
+              ))}
+            </View>
+          </ScrollView>
         ) : file.mime === "text/markdown" ? (
           <Markdown text={file.text ?? ""} />
         ) : (
@@ -272,6 +308,9 @@ function Files({ root }: { root: string }) {
   );
 }
 
+/** высота строки кода: по ней прокручиваем к строке из ссылки */
+const CODE_LINE = 17;
+
 const st = StyleSheet.create({
   tabs: { flexDirection: "row", gap: 4, paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line, backgroundColor: C.bg2 },
   tab: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 2, borderBottomColor: "transparent" },
@@ -280,6 +319,7 @@ const st = StyleSheet.create({
   diffLine: { fontFamily: mono, fontSize: 12, lineHeight: 17, paddingHorizontal: 12 },
   bar: { flexDirection: "row", alignItems: "center", gap: 6, padding: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line },
   entry: { flexDirection: "row", alignItems: "center", gap: 8, justifyContent: "space-between", paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line },
-  code: { fontFamily: mono, fontSize: 12, lineHeight: 17, color: C.text },
+  code: { fontFamily: mono, fontSize: 12, lineHeight: CODE_LINE, color: C.text },
+  hl: { backgroundColor: "rgba(255, 196, 0, 0.22)" },
   edit: { fontFamily: mono, fontSize: 13, lineHeight: 18, color: C.text, backgroundColor: C.bg2, borderRadius: 8, borderWidth: 1, borderColor: C.line, padding: 10, minHeight: 400 },
 });

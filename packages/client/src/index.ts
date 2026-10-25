@@ -26,6 +26,8 @@ import {
   type McpServer,
   type SkillInfo,
   type WakeRuntime,
+  type RemoteSettings,
+  type RemoteStatus,
   type NewSessionPrefs,
   type WakeSetup,
   type CustomProvider,
@@ -44,6 +46,7 @@ export * from "@kamharn/protocol";
 export { speakableText, SPEECH_MAX } from "./speech.ts";
 export { splitArgs, joinArgs, parsePairs } from "./args.ts";
 export { ago, baseName } from "./format.ts";
+export { parseFileRef, resolveFileRef, type FileRef } from "./paths.ts";
 export { t, tn, locale, getLang, getLangSetting, applyLangSetting, onLangChange } from "./i18n.ts";
 import { applyLangSetting, locale } from "./i18n.ts";
 
@@ -457,6 +460,13 @@ export class HubClient {
   /** null — напрямую; пароль не указан и логин тот же — хаб оставит старый */
   setTelegramProxy = (proxy: TelegramProxy | null) => this.api<TelegramStatus>("PUT", "/api/telegram/proxy", { proxy });
   testTelegram = () => this.api("POST", "/api/telegram/test", {});
+  remoteStatus = () => this.api<RemoteStatus>("GET", "/api/remote");
+  saveRemote = (r: Partial<RemoteSettings>) => this.api<RemoteStatus>("PUT", "/api/remote", r);
+  removeRemote = () => this.api<RemoteStatus>("DELETE", "/api/remote");
+  testRemote = () => this.api<{ ok: true; ms: number }>("POST", "/api/remote/test", {});
+  addresses = () => this.api<{ urls: string[]; publicUrls: string[] }>("GET", "/api/addresses");
+  setPublicUrls = (publicUrls: string[]) => this.api<{ urls: string[]; publicUrls: string[] }>("PUT", "/api/addresses", { publicUrls });
+  checkAddress = (url: string) => this.api<{ ok: true; ms: number }>("POST", "/api/addresses/check", { url });
 
   // ---------- провайдеры моделей (opencode) ----------
   providers = () => this.api<ProviderEntry[]>("GET", "/api/providers");

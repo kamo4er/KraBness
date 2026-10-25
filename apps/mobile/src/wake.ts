@@ -1,5 +1,5 @@
 // Пробуждение спящего ПК: хаб спит вместе с ним, поэтому приложение зовёт будильник в домашней сети
-// (scripts/nas-wake/wake.py на NAS, Raspberry Pi…) по Tailscale, а тот шлёт Wake-on-LAN в локалку.
+// (scripts/nas-wake/wake.py на NAS, Raspberry Pi…) по Tailscale или через прокси на белом IP, а тот шлёт Wake-on-LAN в локалку.
 // Адрес, токен, MAC и адрес хаба берём у хаба, пока ПК не спит (настраивается в «Настройки → Пробуждение ПК»).
 import { useEffect, useRef, useState } from "react";
 import * as SecureStore from "expo-secure-store";
@@ -56,7 +56,14 @@ async function call(cfg: WakeConfig, method: "GET" | "POST", path: string, body?
     if (!r.ok) throw Object.assign(new Error(r.status === 401 ? t("Будильник не принял токен", "The relay rejected the token") : `${t("Будильник ответил", "The relay answered")} ${r.status}`), { status: r.status });
     return (await r.json()) as Record<string, unknown>;
   } catch (e) {
-    if ((e as Error).name === "AbortError") throw new Error(t("Будильник не отвечает (Tailscale на телефоне включён?)", "The relay doesn't answer (is Tailscale on the phone on?)"));
+    if ((e as Error).name === "AbortError") {
+      // по https будильник за прокси на белом IP, Tailscale тут ни при чём
+      throw new Error(
+        cfg.url.startsWith("https:")
+          ? t("Будильник не отвечает (интернет на телефоне есть? прокси на NAS работает?)", "The relay doesn't answer (is the phone online? is the proxy on the NAS up?)")
+          : t("Будильник не отвечает (Tailscale на телефоне включён?)", "The relay doesn't answer (is Tailscale on the phone on?)"),
+      );
+    }
     throw e;
   } finally {
     clearTimeout(timer);

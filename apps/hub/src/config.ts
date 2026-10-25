@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileS
 import { dirname, join, relative, resolve, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import { L } from "./lang.ts";
-import type { ModelRef, CustomProvider, LangSetting, McpServer, NewSessionPrefs, TelegramProxy } from "@kamharn/protocol";
+import type { ModelRef, CustomProvider, LangSetting, McpServer, NewSessionPrefs, TelegramProxy, RemoteSettings } from "@kamharn/protocol";
 
 export interface HubConfig {
   /** адреса, на которых слушает хаб; "tailscale" — подставить IPv4 из `tailscale ip -4` */
@@ -32,6 +32,10 @@ export interface HubConfig {
   newSession?: Partial<NewSessionPrefs>;
   /** прокси для Bot API; живёт отдельно от токена — смена бота его не сбрасывает */
   telegramProxy?: TelegramProxy;
+  /** адреса хаба за своим обратным прокси (NAS, роутер с белым IP): попадают в известные адреса и QR */
+  publicUrls?: string[];
+  /** удалённый доступ через свой VPS (remote.ts): SSH-туннель + HTTPS на сервере */
+  remote?: RemoteSettings;
   engines: {
     opencode: { enabled: boolean; bin?: string; port: number; defaultModel?: ModelRef };
     /** userMcp — подключать MCP-серверы из пользовательских настроек Claude (замедляет старт) */
@@ -149,6 +153,18 @@ export class ConfigStore {
   setWake(w: HubConfig["wake"] | undefined): void {
     if (w) this.config.wake = w;
     else delete this.config.wake;
+    this.save();
+  }
+
+  setPublicUrls(list: string[]): void {
+    if (list.length) this.config.publicUrls = list;
+    else delete this.config.publicUrls;
+    this.save();
+  }
+
+  setRemote(r: RemoteSettings | undefined): void {
+    if (r) this.config.remote = r;
+    else delete this.config.remote;
     this.save();
   }
 

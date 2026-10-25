@@ -1,15 +1,15 @@
 // Просмотр проекта сессии без агента: файлы и git-изменения (бесплатно по лимитам).
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, type FileView, type FsEntry, type GitInfo, t } from "@kamharn/client";
 import { client, fmtSize, go, useHub } from "./hub.ts";
 import { Markdown } from "./Parts.tsx";
 import { Terminal } from "./Terminal.tsx";
 import { pickOpencodeModel } from "./ModelPick.tsx";
 
-export function Project({ id }: { id: string }) {
+export function Project({ id, file, line }: { id: string; file?: string; line?: number }) {
   const state = useHub();
   const info = state.sessions.find((s) => s.id === id);
-  const [tab, setTab] = useState<"files" | "git" | "term">("git");
+  const [tab, setTab] = useState<"files" | "git" | "term">(file ? "files" : "git");
   if (!info) return <div className="empty">{state.conn === "online" ? t("Сессия не найдена.", "Session not found.") : t("Загрузка…", "Loading…")}</div>;
   return (
     <div className="page">
@@ -30,7 +30,7 @@ export function Project({ id }: { id: string }) {
           {t("Терминал", "Terminal")}
         </button>
       </div>
-      <div className="page__body">{tab === "git" ? <Changes id={id} /> : tab === "files" ? <Files root={info.directory} /> : <Terminal sessionId={id} />}</div>
+      <div className="page__body">{tab === "git" ? <Changes id={id} /> : tab === "files" ? <Files root={info.directory} initial={file} line={line} /> : <Terminal sessionId={id} />}</div>
     </div>
   );
 }
@@ -102,11 +102,31 @@ function Diff({ text }: { text: string }) {
   );
 }
 
-function Files({ root }: { root: string }) {
+/** initial — файл (или папка) по ссылке из чата, line — строка, к которой прокрутить */
+function Files({ root, initial, line }: { root: string; initial?: string; line?: number }) {
   const [cwd, setCwd] = useState(root);
   const [entries, setEntries] = useState<FsEntry[]>();
   const [file, setFile] = useState<FileView>();
   const [error, setError] = useState<string>();
+  // подсвеченная строка — только у файла, открытого по ссылке
+  const [hl, setHl] = useState<number>();
+  const hlRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!initial) return;
+    client.readFile(initial).then(
+      (f) => {
+        setFile(f);
+        setCwd(f.path.replace(/[\\/][^\\/]+$/, ""));
+        if (line) setHl(line);
+      },
+      // не файл — может, папка: показываем её список
+      (e: Error) => client.list(initial).then(() => setCwd(initial), () => setError(`${initial}: ${e.message}`)),
+    );
+  }, [initial, line]);
+  useEffect(() => {
+    hlRef.current?.scrollIntoView({ block: "center" });
+  }, [hl, file]);
   // правка руками: draft — текст в поле (undefined — просто просмотр)
   const [draft, setDraft] = useState<string>();
   const [saving, setSaving] = useState(false);
@@ -122,6 +142,7 @@ function Files({ root }: { root: string }) {
   async function open(e: FsEntry) {
     if (e.dir) return setCwd(e.path);
     setError(undefined);
+    setHl(undefined);
     try {
       setFile(await client.readFile(e.path));
     } catch (err) {
@@ -134,6 +155,7 @@ function Files({ root }: { root: string }) {
     setDraft(undefined);
     setSaveError(undefined);
     setFile(undefined);
+    setHl(undefined);
   }
 
   async function save() {
@@ -223,6 +245,15 @@ function Files({ root }: { root: string }) {
           ) : (
             <p className="muted">{t("Двоичный файл", "Binary file")} ({file.mime}) — {t("можно скачать.", "you can download it.")}</p>
           )
+        ) : hl ? (
+          // ссылка на строку: текст построчно, нужная подсвечена (и у .md — исходник, а не разметка)
+          <pre className="pre project__text">
+            {(file.text ?? "").split(/\r?\n/).map((l, i) => (
+              <div key={i} ref={i + 1 === hl ? hlRef : undefined} className={i + 1 === hl ? "project__hl" : undefined}>
+                {l || " "}
+              </div>
+            ))}
+          </pre>
         ) : file.mime === "text/markdown" ? (
           <Markdown text={file.text ?? ""} />
         ) : (

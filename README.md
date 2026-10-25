@@ -111,6 +111,17 @@ That's it: sessions, chat, approvals and files are on the phone. Requests from t
 
 No app? Open `http://<PC Tailscale IP>:7420` in the phone's browser and pair with the same code.
 
+### Without Tailscale: your own server (optional)
+
+If Tailscale doesn't work from your phone (for example, a VPN on the PC breaks it on mobile data), the hub can go through your own VPS instead. The PC keeps an outgoing SSH tunnel to the server, and the server serves the hub over HTTPS with a free Let's Encrypt certificate. Nothing has to be opened on the PC or the home router.
+
+1. You need a VPS with Ubuntu or Debian where ports 80 and 443 are free. No domain needed: the address will be `https://krab.<server-ip>.sslip.io`.
+2. In the web UI on the PC, open Settings → Remote access via your own server and copy the command. Run it on the VPS as root. It installs Caddy and a `krabtunnel` user whose key may only open this one tunnel ([`scripts/vps-setup.sh`](scripts/vps-setup.sh), safe to run again).
+3. Enter the server IP and press "Save and connect". The hub checks the address from the outside.
+
+The new address goes into the pairing QR, and an already paired app picks it up by itself the next time it connects. The app tries all known addresses and uses the one that answers: Tailscale at home, your server on mobile data.
+
+
 ## Notifications
 
 The app learns that the agent needs an approval, has a question, hit an error or finished. Pick any of the channels below. While you are active in the web UI on the PC, notifications are muted.
@@ -187,7 +198,7 @@ Synology: Control Panel → Task Scheduler → Create → Triggered Task, event 
 
 **Is my Claude subscription used legitimately?** Yes. KraBness runs the official `claude` CLI, the same one you use in a terminal. It never calls the API with your session tokens.
 
-**Who can reach my PC?** Only devices in your Tailscale network that you paired with a code. The hub does not listen on the public internet, and the firewall rule allows only the Tailscale interface. Don't publish the hub with `tailscale funnel` or another tunnel: a paired device can run commands on your PC, that's the point of the app.
+**Who can reach my PC?** Only devices that you paired with a code. Over Tailscale the hub isn't on the public internet at all, and the firewall rule allows only the Tailscale interface. With your own server the hub is reachable from the internet, but every request needs a device token; a pairing code works only for 5 minutes after you start pairing on the PC, and five wrong codes burn it. Requests that come through the tunnel never count as local, even though they arrive from 127.0.0.1. Don't publish the hub any other way (`tailscale funnel`, port forwarding, your own proxy): a paired device can run commands on your PC, that's the point of the app.
 
 **Are updates safe?** Every release archive is signed by the author's key, and the hub refuses to install an archive without a valid signature, even if it comes from the right GitHub page.
 
@@ -201,6 +212,7 @@ Synology: Control Panel → Task Scheduler → Create → Triggered Task, event 
    ```
 2. Delete the folder.
 3. The firewall rule is called "KamHarn hub (Tailscale)".
+4. If you set up your own server: on the VPS, delete the `krabtunnel` user and the block between the `# >>> krabness` markers in `/etc/caddy/Caddyfile`.
 
 ## Config
 
@@ -209,7 +221,9 @@ Synology: Control Panel → Task Scheduler → Create → Triggered Task, event 
 - the allowed folders;
 - the engines (`engines.claude.userMcp: true` also loads the MCP servers from your Claude Code settings);
 - the language (`language`: `auto`, `en` or `ru`);
-- updates (`updates.auto: false` turns off the daily check).
+- updates (`updates.auto: false` turns off the daily check);
+- remote access via your own server (`remote`; the hub's tunnel key is `config/remote_ed25519`);
+- addresses behind your own reverse proxy, for example a NAS on a public IP (`publicUrls`, they go into the pairing QR). Add the PC's home address to `listen` and run `scripts\firewall-lan.ps1 -Proxy <proxy IP>` as administrator: the hub port then accepts only the proxy.
 
 Almost everything is also in the UI.
 

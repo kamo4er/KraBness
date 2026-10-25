@@ -52,12 +52,13 @@ export function useHub(): ClientState {
   return useSyncExternalStore(c ? c.subscribe : noop, c ? c.getState : () => EMPTY);
 }
 
-/** «http://» и порт 7420 по умолчанию, без хвостового слэша. */
+/** «http://» и порт 7420 по умолчанию (у https — нет), без хвостового слэша. */
 export function normalizeUrl(s: string): string {
   let u = s.trim();
   if (!/^https?:\/\//i.test(u)) u = "http://" + u;
   u = u.replace(/\/+$/, "");
-  if (!/:\d+$/.test(u.replace(/^https?:\/\//i, ""))) u += ":7420";
+  // https — свой сервер (VPS) на стандартном 443, порт хаба нужен только для http
+  if (!/:\d+$/.test(u.replace(/^https?:\/\//i, "")) && !/^https:/i.test(u)) u += ":7420";
   return u;
 }
 
@@ -140,6 +141,17 @@ export async function revive(): Promise<void> {
   }
 }
 
+/** Хаб знает свои адреса лучше (подключили свой сервер, сменился IP в Tailscale): дописываем новые к сохранённым. */
+async function learnUrls(): Promise<void> {
+  const c = client;
+  const info = c && (await c.hubInfo().catch(() => undefined));
+  if (!info || client !== c || !conn) return;
+  const known = conn.urls;
+  const fresh = info.urls.filter((u) => !/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/i.test(u) && !known.includes(u));
+  if (fresh.length) setConn({ ...conn, urls: [...known, ...fresh] });
+}
+let learnedFor: HubClient | null = null;
+
 let watching = false;
 function watch(): void {
   if (watching) return;
@@ -153,6 +165,11 @@ function watch(): void {
   // офлайн дольше пары секунд — возможно, сменилась сеть и текущий адрес больше не доступен
   setInterval(() => {
     const st = client?.state.conn;
+    // каждое новое подключение — заново спрашиваем адреса
+    if (st === "online" && learnedFor !== client) {
+      learnedFor = client;
+      void learnUrls();
+    } else if (st !== "online") learnedFor = null;
     if (st === "offline" || st === "connecting") {
       if (!offlineTimer) offlineTimer = setTimeout(() => ((offlineTimer = undefined), void revive()), 3000);
     }

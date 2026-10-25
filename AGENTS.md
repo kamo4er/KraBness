@@ -31,6 +31,7 @@ You may be running **inside KraBness itself** (the hub started you, and the user
   - `sessions.ts` journal and fan-out;
   - `engines/*` the two engines;
   - `updates.ts` GitHub Releases;
+  - `remote.ts` remote access via your own VPS (`ssh -R` tunnel, Caddy on the server, `scripts/vps-setup.sh`);
   - `lang.ts` interface language.
 - `apps/web/src`: React + Vite.
 - `apps/mobile`: Expo (see `apps/mobile/AGENTS.md`).
@@ -41,6 +42,7 @@ You may be running **inside KraBness itself** (the hub started you, and the user
 - Security:
   - localhost is trusted, but cross-site requests are rejected (`crossSite` in `server.ts`);
   - other devices use a device token from pairing;
+  - the VPS tunnel lands on its own local port, its sockets (`tunnelSockets` in `auth.ts`) are never local, even from 127.0.0.1;
   - agents only work inside the allowed `roots`, checked via realpath.
 
 ## Run and check

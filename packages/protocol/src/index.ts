@@ -332,6 +332,33 @@ export interface TelegramStatus {
   proxy?: Omit<TelegramProxy, "password"> & { hasPassword: boolean };
 }
 
+/** Удалённый доступ через свой сервер: хаб держит SSH-туннель на VPS, там HTTPS (Caddy). */
+export interface RemoteSettings {
+  /** адрес VPS (IP или домен) */
+  host: string;
+  /** пользователь туннеля на VPS (scripts/vps-setup.sh заводит krabtunnel) */
+  user: string;
+  sshPort: number;
+  /** порт на VPS, куда приходит туннель (127.0.0.1:<remotePort>, на него смотрит Caddy) */
+  remotePort: number;
+  /** публичный адрес: https://krab.<ip>.sslip.io */
+  url: string;
+  enabled: boolean;
+}
+
+export interface RemoteStatus {
+  configured: boolean;
+  settings?: RemoteSettings;
+  /** открытый ключ хаба — его надо прописать на VPS */
+  publicKey: string;
+  /** команда для VPS: ставит Caddy и пользователя туннеля с этим ключом */
+  setupCommand: string;
+  state: "off" | "connecting" | "up" | "error";
+  error?: string;
+  /** когда состояние сменилось (мс) */
+  since: number;
+}
+
 /** Прокси до api.telegram.org — там, где Telegram заблокирован (свой VPS с SOCKS5 или HTTP-прокси). */
 export interface TelegramProxy {
   type: "socks5" | "http";

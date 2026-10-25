@@ -4,11 +4,13 @@ import { useSyncExternalStore } from "react";
 export type Route =
   | { page: "home" }
   | { page: "session"; id: string }
-  | { page: "project"; id: string }
+  /** file — сразу открыть этот файл (абсолютный путь), line — строку в нём (ссылки на файлы из чата) */
+  | { page: "project"; id: string; file?: string; line?: number }
   | { page: "file"; fileId: string; name: string; mime: string; size: number }
   /** group — новая сессия сразу в группе */
   | { page: "new"; group?: string }
-  | { page: "settings" }
+  /** section — раздел настроек (без него — список разделов) */
+  | { page: "settings"; section?: "general" | "agents" | "connect" | "notify" | "computer" | "updates" }
   /** модели и провайдеры opencode */
   | { page: "providers" }
   /** свои MCP-серверы и скиллы */

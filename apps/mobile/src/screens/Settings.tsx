@@ -1,6 +1,6 @@
-// Настройки: адрес хаба, состояние связи, отключение устройства.
+// Настройки: список разделов, по нажатию — страница раздела.
 import { useEffect, useState } from "react";
-import { Linking, ScrollView, StyleSheet, Switch, Text, TextInput, ToastAndroid, View } from "react-native";
+import { Linking, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, ToastAndroid, View } from "react-native";
 import type { HubInfo, TelegramProxy, TelegramStatus } from "@kamharn/client";
 import { client, saveQuickPrompts, unpair, useConn, useHub, useQuickPrompts } from "../store.ts";
 import { back, go } from "../nav.ts";
@@ -9,6 +9,7 @@ import { Btn, connLabel, ConnDot } from "../ui.tsx";
 import { C, S } from "../theme.ts";
 import { WakePanel } from "../WakePanel.tsx";
 import { WakeSetupBox } from "../WakeSetupBox.tsx";
+import { RemoteBox } from "../RemoteBox.tsx";
 import { EngineSettings } from "../EngineSettings.tsx";
 import { LangSwitch } from "../LangSwitch.tsx";
 import { t, locale } from "@kamharn/client";
@@ -18,143 +19,204 @@ import { dialog } from "../dialog.tsx";
 import { firebaseBuilt, setNotifyMode, useNotifyMode } from "../notify.ts";
 import { HubUpdateBox } from "../HubUpdate.tsx";
 
-export function Settings() {
+export type SettingsSection = "general" | "agents" | "connect" | "notify" | "computer" | "updates";
+
+/** разделы настроек — функцией: подписи на текущем языке */
+const SECTIONS = (): { id: SettingsSection; icon: string; title: string; hint: string }[] => [
+  { id: "general", icon: "⚙️", title: t("Общие", "General"), hint: t("Язык, быстрые кнопки", "Language, quick buttons") },
+  { id: "agents", icon: "🤖", title: t("Агенты", "Agents"), hint: t("Движки, модели и провайдеры, MCP, скиллы", "Engines, models and providers, MCP, skills") },
+  { id: "connect", icon: "🔗", title: t("Подключение", "Connection"), hint: t("Связь с хабом, свой сервер, отключение", "Hub connection, your own server, disconnecting") },
+  { id: "notify", icon: "🔔", title: t("Уведомления", "Notifications"), hint: t("Способ уведомлений, связь в фоне, Telegram", "How to notify, staying connected, Telegram") },
+  { id: "computer", icon: "🖥️", title: t("Компьютер", "Computer"), hint: t("Разбудить, усыпить, экран, перезапуск хаба", "Wake, sleep, screen, restarting the hub") },
+  { id: "updates", icon: "⬆️", title: t("Обновления", "Updates"), hint: t("KraBness и это приложение", "KraBness and this app") },
+];
+
+/** Без section — список разделов, с section — страница раздела («назад» возвращает к списку: он ниже в стеке). */
+export function Settings({ section }: { section?: SettingsSection }) {
   const conn = useConn();
   const state = useHub();
   const [info, setInfo] = useState<HubInfo>();
   useEffect(() => {
     if (state.conn === "online") void client?.hubInfo().then(setInfo, () => {});
   }, [state.conn]);
+  const sec = SECTIONS().find((x) => x.id === section);
+
+  if (!sec)
+    return (
+      <View style={S.screen}>
+        <View style={S.head}>
+          <Btn small kind="ghost" title="←" onPress={back} />
+          <Text style={S.h1}>{t("Настройки", "Settings")}</Text>
+        </View>
+        <ScrollView contentContainerStyle={[st.body, { gap: 8 }]}>
+          {SECTIONS().map((x) => (
+            <Pressable key={x.id} style={({ pressed }) => [st.item, pressed && { opacity: 0.7 }]} onPress={() => go({ page: "settings", section: x.id })}>
+              <Text style={st.itemIcon}>{x.icon}</Text>
+              <View style={{ flex: 1, gap: 2 }}>
+                <View style={st.row}>
+                  <Text style={[S.text, { fontWeight: "700" }]}>{x.title}</Text>
+                  {x.id === "connect" ? <ConnDot conn={state.conn} /> : null}
+                </View>
+                <Text style={S.muted}>{x.hint}</Text>
+              </View>
+              <Text style={st.itemArrow}>›</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      </View>
+    );
+
   return (
     <View style={S.screen}>
       <View style={S.head}>
         <Btn small kind="ghost" title="←" onPress={back} />
-        <Text style={S.h1}>{t("Настройки", "Settings")}</Text>
+        <Text style={S.h1}>
+          {sec.icon} {sec.title}
+        </Text>
       </View>
       <ScrollView contentContainerStyle={st.body} keyboardShouldPersistTaps="handled">
-        <Text style={S.h3}>{t("Язык / Language", "Language / Язык")}</Text>
-        <View style={st.box}>
-          <LangSwitch />
-        </View>
+        {sec.id === "general" ? (
+          <>
+            <Text style={S.h3}>{t("Язык / Language", "Language / Язык")}</Text>
+            <View style={st.box}>
+              <LangSwitch />
+            </View>
+            <QuickPromptsEditor />
+          </>
+        ) : sec.id === "agents" ? (
+          <>
+            <Text style={S.h3}>{t("Движки", "Engines")}</Text>
+            <View style={st.box}>
+              <EngineSettings />
+            </View>
 
-        <Text style={S.h3}>{t("Хаб", "Hub")}</Text>
-        <View style={st.box}>
-          <View style={st.row}>
-            <ConnDot conn={state.conn} />
-            <Text style={S.text}>{connLabel(state.conn)}</Text>
-          </View>
-          <Text style={S.muted}>{t("Сейчас", "Now")}: {client?.baseUrl}</Text>
-          <Text style={S.muted}>{t("Известные адреса", "Known addresses")}: {conn?.urls.join(", ")}</Text>
-          {info ? (
-            <Text style={S.muted}>
-              {t("Версия", "Version")} {info.version}
-              {info.startedAt ? ` · ${t("запущен", "started")} ${new Date(info.startedAt).toLocaleString(locale())}` : ""}
-            </Text>
-          ) : null}
-          <View style={st.row}>
-            <Btn small title={t("Переподключиться", "Reconnect")} onPress={() => client?.reconnectNow()} />
-            {info?.supervised ? (
+            <Text style={S.h3}>{t("Модели", "Models")}</Text>
+            <View style={st.box}>
+              <Text style={S.muted}>{t("OpenAI (и подписка ChatGPT), OpenRouter, DeepSeek, Gemini, Kimi, GLM и др. или свой сервер (LM Studio, Ollama).", "OpenAI (and a ChatGPT subscription), OpenRouter, DeepSeek, Gemini, Kimi, GLM and more, or your own server (LM Studio, Ollama).")}</Text>
+              <Btn title={t("Модели и провайдеры →", "Models and providers →")} onPress={() => go({ page: "providers" })} />
+            </View>
+
+            <Text style={S.h3}>{t("Инструменты агентов", "Agent tools")}</Text>
+            <View style={st.box}>
+              <Text style={S.muted}>{t("MCP-серверы (браузер, базы, API) и скиллы — готовые инструкции и скрипты. Работают и в Claude, и в opencode.", "MCP servers (a browser, databases, APIs) and skills — ready-made instructions and scripts. They work in both Claude and opencode.")}</Text>
+              <View style={st.row}>
+                <Btn title={t("MCP-серверы →", "MCP servers →")} style={{ flex: 1 }} onPress={() => go({ page: "mcp" })} />
+                <Btn title={t("Скиллы →", "Skills →")} style={{ flex: 1 }} onPress={() => go({ page: "skills" })} />
+              </View>
+            </View>
+          </>
+        ) : sec.id === "connect" ? (
+          <>
+            <Text style={S.h3}>{t("Хаб", "Hub")}</Text>
+            <View style={st.box}>
+              <View style={st.row}>
+                <ConnDot conn={state.conn} />
+                <Text style={S.text}>{connLabel(state.conn)}</Text>
+              </View>
+              <Text style={S.muted}>{t("Сейчас", "Now")}: {client?.baseUrl}</Text>
+              <Text style={S.muted}>{t("Известные адреса", "Known addresses")}: {conn?.urls.join(", ")}</Text>
+              <RemoteBox />
+              <Btn small title={t("Переподключиться", "Reconnect")} onPress={() => client?.reconnectNow()} style={{ alignSelf: "flex-start" }} />
+            </View>
+
+            <Text style={S.h3}>{t("Это устройство", "This device")}</Text>
+            <View style={st.box}>
+              <Text style={S.muted}>ID: {conn?.deviceId}</Text>
+              <Text style={S.muted}>{t("Отключить можно и с ПК: веб-UI → Настройки → Подключение → Устройства.", "You can also disconnect from the PC: web UI → Settings → Connection → Devices.")}</Text>
               <Btn
-                small
-                title={t("Перезапустить хаб", "Restart hub")}
+                kind="danger"
+                title={t("Отключиться от хаба", "Disconnect from the hub")}
                 onPress={() =>
-                  dialog(t("Перезапустить хаб?", "Restart the hub?"), t("Работающие сейчас агенты прервутся, история сохранится.", "Running agents will be interrupted, history is kept."), [
+                  dialog(t("Отключиться?", "Disconnect?"), t("Токен удалится с телефона. Для нового подключения понадобится QR с ПК.", "The token will be removed from the phone. You'll need the QR from the PC to connect again."), [
                     { text: t("Отмена", "Cancel"), style: "cancel" },
-                    {
-                      text: t("Перезапустить", "Restart"),
-                      onPress: () =>
-                        client?.restartHub().then(
-                          () => ToastAndroid.show(t("Хаб перезапускается, переподключусь сам", "The hub is restarting, I'll reconnect by myself"), ToastAndroid.LONG),
-                          (e: Error) => dialog(t("Не получилось", "Failed"), e.message),
-                        ),
-                    },
+                    { text: t("Отключиться", "Disconnect"), style: "destructive", onPress: unpair },
                   ])
                 }
               />
-            ) : null}
-          </View>
-          {info && !info.supervised ? <Text style={S.muted}>{t("Хаб запущен вручную — перезапуск из приложения недоступен.", "The hub was started manually — it can't be restarted from the app.")}</Text> : null}
-          {/* AGPL (п. 13): пользователям по сети — ссылка на исходники */}
-          <Text style={S.muted} onPress={() => void Linking.openURL("https://github.com/kamo4er/KraBness")}>
-            KraBness · {t("лицензия", "license")} AGPL-3.0 · <Text style={{ color: C.accent }}>{t("исходный код", "source code")}</Text>
-          </Text>
-        </View>
+            </View>
+          </>
+        ) : sec.id === "notify" ? (
+          <>
+            <View style={st.box}>
+              <NotifyModeRow />
+            </View>
+            <View style={[st.box, { marginTop: 12 }]}>
+              <KeepAliveRow />
+            </View>
+            <TelegramBox />
+          </>
+        ) : sec.id === "computer" ? (
+          <>
+            <View style={st.box}>
+              <WakePanel />
+              {state.conn === "online" ? (
+                <Btn title={t("Экран ПК", "PC screen")} onPress={() => openScreen().catch((e: Error) => dialog(t("Не получилось", "Failed"), e.message))} />
+              ) : null}
+              {info?.canSleep ? (
+                <Btn
+                  title={t("Усыпить ПК", "Put PC to sleep")}
+                  onPress={() =>
+                    dialog(t("Усыпить ПК?", "Put the PC to sleep?"), t("Через 20 секунд ПК уснёт. Работающие агенты остановятся, пока он спит. Разбудить можно отсюда же.", "The PC goes to sleep in 20 seconds. Running agents pause while it sleeps. You can wake it from here."), [
+                      { text: t("Отмена", "Cancel"), style: "cancel" },
+                      {
+                        text: t("Усыпить", "Sleep"),
+                        onPress: () =>
+                          client?.sleepPc(20).then(
+                            () => ToastAndroid.show(t("ПК уснёт через 20 с", "The PC sleeps in 20 s"), ToastAndroid.LONG),
+                            (e: Error) => dialog(t("Не получилось", "Failed"), e.message),
+                          ),
+                      },
+                    ])
+                  }
+                />
+              ) : null}
+              <WakeSetupBox />
+            </View>
 
-        <Text style={S.h3}>{t("Обновления KraBness", "KraBness updates")}</Text>
-        <HubUpdateBox />
-
-        <Text style={S.h3}>{t("Компьютер", "Computer")}</Text>
-        <View style={st.box}>
-          <WakePanel />
-          {state.conn === "online" ? (
-            <Btn title={t("Экран ПК", "PC screen")} onPress={() => openScreen().catch((e: Error) => dialog(t("Не получилось", "Failed"), e.message))} />
-          ) : null}
-          {info?.canSleep ? (
-            <Btn
-              title={t("Усыпить ПК", "Put PC to sleep")}
-              onPress={() =>
-                dialog(t("Усыпить ПК?", "Put the PC to sleep?"), t("Через 20 секунд ПК уснёт. Работающие агенты остановятся, пока он спит. Разбудить можно отсюда же.", "The PC goes to sleep in 20 seconds. Running agents pause while it sleeps. You can wake it from here."), [
-                  { text: t("Отмена", "Cancel"), style: "cancel" },
-                  {
-                    text: t("Усыпить", "Sleep"),
-                    onPress: () =>
-                      client?.sleepPc(20).then(
-                        () => ToastAndroid.show(t("ПК уснёт через 20 с", "The PC sleeps in 20 s"), ToastAndroid.LONG),
-                        (e: Error) => dialog(t("Не получилось", "Failed"), e.message),
-                      ),
-                  },
-                ])
-              }
-            />
-          ) : null}
-          <WakeSetupBox />
-        </View>
-
-        <Text style={S.h3}>{t("Движки", "Engines")}</Text>
-        <View style={st.box}>
-          <EngineSettings />
-        </View>
-
-        <Text style={S.h3}>{t("Модели", "Models")}</Text>
-        <View style={st.box}>
-          <Text style={S.muted}>{t("OpenAI (и подписка ChatGPT), OpenRouter, DeepSeek, Gemini, Kimi, GLM и др. или свой сервер (LM Studio, Ollama).", "OpenAI (and a ChatGPT subscription), OpenRouter, DeepSeek, Gemini, Kimi, GLM and more, or your own server (LM Studio, Ollama).")}</Text>
-          <Btn title={t("Модели и провайдеры →", "Models and providers →")} onPress={() => go({ page: "providers" })} />
-        </View>
-
-        <Text style={S.h3}>{t("Инструменты агентов", "Agent tools")}</Text>
-        <View style={st.box}>
-          <Text style={S.muted}>{t("MCP-серверы (браузер, базы, API) и скиллы — готовые инструкции и скрипты. Работают и в Claude, и в opencode.", "MCP servers (a browser, databases, APIs) and skills — ready-made instructions and scripts. They work in both Claude and opencode.")}</Text>
-          <View style={st.row}>
-            <Btn title={t("MCP-серверы →", "MCP servers →")} style={{ flex: 1 }} onPress={() => go({ page: "mcp" })} />
-            <Btn title={t("Скиллы →", "Skills →")} style={{ flex: 1 }} onPress={() => go({ page: "skills" })} />
-          </View>
-        </View>
-
-        <Text style={S.h3}>{t("Уведомления", "Notifications")}</Text>
-        <View style={st.box}>
-          <NotifyModeRow />
-        </View>
-        <TelegramBox />
-
-        <QuickPromptsEditor />
-
-        <Text style={S.h3}>{t("Устройство", "Device")}</Text>
-        <View style={st.box}>
-          <KeepAliveRow />
-          <Text style={S.muted}>{t("Приложение", "App")} {APP_VERSION} ({t("сборка", "build")} {APP_VERSION_CODE})</Text>
-          <Text style={S.muted}>ID: {conn?.deviceId}</Text>
-          <Text style={S.muted}>{t("Отключить можно и с ПК: веб-UI → Настройки → Устройства.", "You can also disconnect from the PC: web UI → Settings → Devices.")}</Text>
-          <Btn
-            kind="danger"
-            title={t("Отключиться от хаба", "Disconnect from the hub")}
-            onPress={() =>
-              dialog(t("Отключиться?", "Disconnect?"), t("Токен удалится с телефона. Для нового подключения понадобится QR с ПК.", "The token will be removed from the phone. You'll need the QR from the PC to connect again."), [
-                { text: t("Отмена", "Cancel"), style: "cancel" },
-                { text: t("Отключиться", "Disconnect"), style: "destructive", onPress: unpair },
-              ])
-            }
-          />
-        </View>
+            <Text style={S.h3}>{t("Хаб", "Hub")}</Text>
+            <View style={st.box}>
+              {info ? (
+                <Text style={S.muted}>
+                  {t("Версия", "Version")} {info.version}
+                  {info.startedAt ? ` · ${t("запущен", "started")} ${new Date(info.startedAt).toLocaleString(locale())}` : ""}
+                </Text>
+              ) : null}
+              {info?.supervised ? (
+                <Btn
+                  title={t("Перезапустить хаб", "Restart hub")}
+                  onPress={() =>
+                    dialog(t("Перезапустить хаб?", "Restart the hub?"), t("Работающие сейчас агенты прервутся, история сохранится.", "Running agents will be interrupted, history is kept."), [
+                      { text: t("Отмена", "Cancel"), style: "cancel" },
+                      {
+                        text: t("Перезапустить", "Restart"),
+                        onPress: () =>
+                          client?.restartHub().then(
+                            () => ToastAndroid.show(t("Хаб перезапускается, переподключусь сам", "The hub is restarting, I'll reconnect by myself"), ToastAndroid.LONG),
+                            (e: Error) => dialog(t("Не получилось", "Failed"), e.message),
+                          ),
+                      },
+                    ])
+                  }
+                />
+              ) : null}
+              {info && !info.supervised ? <Text style={S.muted}>{t("Хаб запущен вручную — перезапуск из приложения недоступен.", "The hub was started manually — it can't be restarted from the app.")}</Text> : null}
+            </View>
+          </>
+        ) : (
+          <>
+            <HubUpdateBox />
+            <Text style={S.h3}>{t("Приложение", "App")}</Text>
+            <View style={st.box}>
+              <Text style={S.muted}>
+                {t("Приложение", "App")} {APP_VERSION} ({t("сборка", "build")} {APP_VERSION_CODE})
+              </Text>
+              {/* AGPL (п. 13): пользователям по сети — ссылка на исходники */}
+              <Text style={S.muted} onPress={() => void Linking.openURL("https://github.com/kamo4er/KraBness")}>
+                KraBness · {t("лицензия", "license")} AGPL-3.0 · <Text style={{ color: C.accent }}>{t("исходный код", "source code")}</Text>
+              </Text>
+            </View>
+          </>
+        )}
       </ScrollView>
     </View>
   );
@@ -164,6 +226,9 @@ const st = StyleSheet.create({
   body: { padding: 16 },
   box: { backgroundColor: C.bg2, borderRadius: 12, borderWidth: 1, borderColor: C.line, padding: 12, gap: 8 },
   row: { flexDirection: "row", alignItems: "center", gap: 8 },
+  item: { flexDirection: "row", alignItems: "center", gap: 14, padding: 14, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.bg2 },
+  itemIcon: { fontSize: 22, width: 28, textAlign: "center" },
+  itemArrow: { fontSize: 24, color: C.muted },
 });
 
 /** «Держать связь в фоне»: сервис с постоянным уведомлением, Android не замораживает приложение. */

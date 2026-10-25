@@ -1,16 +1,45 @@
 // Отрисовка частей сообщения: текст (markdown), размышления, вызовы инструментов, файлы.
-import { memo, useState } from "react";
+import { createContext, memo, useContext, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { limitView, type ClaudeLimits, type Part, type PermissionRequest, type QuestionAnswers, type QuestionRequest, t } from "@kamharn/client";
+import { limitView, parseFileRef, type FileRef, type ClaudeLimits, type Part, type PermissionRequest, type QuestionAnswers, type QuestionRequest, t } from "@kamharn/client";
 import { client, fmtSize } from "./hub.ts";
 
+/** открыть файл по ссылке из ответа (чат даёт его; в просмотре .md-файла ссылок на файлы нет) */
+export const FileRefCtx = createContext<((ref: FileRef) => void) | undefined>(undefined);
+
+/** ссылка без схемы ([план](tmp/plans/a.md)) — тоже путь к файлу */
+const linkRef = (href: string | undefined): FileRef | undefined => {
+  if (!href || href.startsWith("#") || /^[a-z][a-z0-9+.-]*:(?![\\/])/i.test(href.replace(/^[A-Za-z]:/, ""))) return undefined;
+  let h = href;
+  try {
+    h = decodeURI(href);
+  } catch {
+    /* кривой %XX — берём как есть */
+  }
+  return parseFileRef(/[\\/]/.test(h) ? h : `./${h}`);
+};
+
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
+  const openRef = useContext(FileRefCtx);
   return (
     <div className="md">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        components={{ a: ({ node: _, ...props }) => <a {...props} target="_blank" rel="noreferrer" /> }}
+        components={{
+          a: ({ node: _, href, ...props }) => {
+            const ref = openRef && linkRef(href);
+            if (ref) return <a {...props} href="#" className="fileref" title={ref.path} onClick={(e) => (e.preventDefault(), openRef(ref))} />;
+            return <a {...props} href={href} target="_blank" rel="noreferrer" />;
+          },
+          code: ({ node, className, children, ...props }) => {
+            // `код` в строке: у блока ``` позиция занимает несколько строк, у инлайна — одну
+            const inline = !className && node?.position?.start.line === node?.position?.end.line;
+            const ref = inline && openRef && typeof children === "string" ? parseFileRef(children) : undefined;
+            if (ref) return <code {...props} className="fileref" role="link" title={t("Открыть файл", "Open the file")} onClick={() => openRef!(ref)}>{children}</code>;
+            return <code {...props} className={className}>{children}</code>;
+          },
+        }}
       >
         {text}
       </ReactMarkdown>

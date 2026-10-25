@@ -10,6 +10,9 @@ export function isLoopback(addr: string | undefined): boolean {
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
 }
 
+/** Сокеты туннеля с VPS (remote.ts): адрес у них 127.0.0.1, но это чужая машина — доверия localhost нет. */
+export const tunnelSockets = new WeakSet<object>();
+
 const hash = (token: string) => createHash("sha256").update(token).digest("hex");
 
 export class Auth {

@@ -53,7 +53,7 @@ export function UpdateBanner() {
               {t("Обновить", "Update")}
             </button>
           )}
-          <button className="btn btn--small" onClick={() => go({ page: "settings" })}>
+          <button className="btn btn--small" onClick={() => go({ page: "settings", section: "updates" })}>
             {t("Подробнее", "Details")}
           </button>
         </div>

@@ -1,7 +1,7 @@
 // Чат сессии: стрим сообщений, инструменты, подтверждения, смена модели и режима, отправка и остановка.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View } from "react-native";
-import { limitView, type ClaudeLimits, type ListeningPort, type MessageView, type PermissionMode, type SessionInfo, type SlashCommand, t, locale } from "@kamharn/client";
+import { limitView, resolveFileRef, type FileRef, type ClaudeLimits, type ListeningPort, type MessageView, type PermissionMode, type SessionInfo, type SlashCommand, t, locale } from "@kamharn/client";
 import { client, fmtSize, useEngines, useHub, useQuickPrompts } from "../store.ts";
 import { loadChat } from "../cache.ts";
 import { getDraft, getDraftFiles, setDraft, setDraftFiles } from "../drafts.ts";
@@ -10,7 +10,7 @@ import { pickFiles, pickPhotos, takePhoto, upload, type Picked } from "../files.
 import { useDictation, voiceAvailable } from "../voice.ts";
 import { back, go, replace } from "../nav.ts";
 import { MODES } from "./NewSession.tsx";
-import { FileChip, PartView, PermissionCard, QuestionCard } from "../Parts.tsx";
+import { FileChip, FileRefCtx, PartView, PermissionCard, QuestionCard } from "../Parts.tsx";
 import { Btn, ConnDot, EngineBadge, Limits, ListSheet, Picker } from "../ui.tsx";
 import { C, S, mono } from "../theme.ts";
 import { dialog } from "../dialog.tsx";
@@ -20,6 +20,9 @@ export function Chat({ id }: { id: string }) {
   const state = useHub();
   const view = state.views[id];
   const info = state.sessions.find((s) => s.id === id) ?? view?.info;
+  // тап по пути к файлу в ответе — просмотр проекта на этом файле (стабильная ссылка: иначе перерисуется весь markdown)
+  const dir = info?.directory;
+  const openRef = useCallback((r: FileRef) => dir && go({ page: "project", id, file: resolveFileRef(r, dir), ...(r.line ? { line: r.line } : {}) }), [id, dir]);
   const list = useRef<FlatList<MessageView>>(null);
   const [showDown, setShowDown] = useState(false);
   const [search, setSearch] = useState<string | null>(null);
@@ -74,6 +77,7 @@ export function Chat({ id }: { id: string }) {
 
   return (
     // подъём над клавиатурой — общий, в App.tsx
+    <FileRefCtx.Provider value={openRef}>
     <View style={S.screen}>
       {search !== null ? (
         <View style={[S.head, st.searchBar]}>
@@ -156,6 +160,7 @@ export function Chat({ id }: { id: string }) {
       {view?.questions.map((q) => <QuestionCard key={q.id} sessionId={id} req={q} />)}
       <Composer key={id} sessionId={id} busy={busy} slash={info.engine === "claude"} />
     </View>
+    </FileRefCtx.Provider>
   );
 }
 

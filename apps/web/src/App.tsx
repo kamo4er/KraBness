@@ -51,9 +51,9 @@ export function App() {
       </aside>
       <main className="main">
         {route.page === "session" && <Chat key={route.id} id={route.id} />}
-        {route.page === "project" && <Project key={route.id} id={route.id} />}
+        {route.page === "project" && <Project key={`${route.id}|${route.file ?? ""}|${route.line ?? ""}`} id={route.id} file={route.file} line={route.line} />}
         {route.page === "new" && <NewSession key={route.group ?? ""} group={route.group} />}
-        {route.page === "settings" && <Settings />}
+        {route.page === "settings" && <Settings key={route.section ?? ""} section={route.section} />}
         {route.page === "group" && <Group key={route.id} id={route.id} />}
         {route.page === "providers" && <Providers />}
         {route.page === "mcp" && <Mcp />}

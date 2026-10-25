@@ -64,8 +64,8 @@ export function WakeSettings() {
       ) : (
         <p className="muted">
           {t(
-            "Спящий ПК недоступен по сети, поэтому будит его «будильник» — маленький скрипт на устройстве, которое всегда включено и стоит в той же домашней сети (NAS, Raspberry Pi, роутер с Python 3). Телефон зовёт его через Tailscale, а он шлёт ПК сигнал Wake-on-LAN.",
-            "A sleeping PC can't be reached over the network, so a “relay” wakes it — a tiny script on an always-on device in the same home network (NAS, Raspberry Pi, a router with Python 3). The phone calls it over Tailscale and it sends the PC a Wake-on-LAN signal.",
+            "Спящий ПК недоступен по сети, поэтому будит его «будильник» — маленький скрипт на устройстве, которое всегда включено и стоит в той же домашней сети (NAS, Raspberry Pi, роутер с Python 3). Телефон зовёт его через Tailscale или через обратный прокси на белом IP, а он шлёт ПК сигнал Wake-on-LAN.",
+            "A sleeping PC can't be reached over the network, so a “relay” wakes it — a tiny script on an always-on device in the same home network (NAS, Raspberry Pi, a router with Python 3). The phone calls it over Tailscale or through a reverse proxy on a public IP, and it sends the PC a Wake-on-LAN signal.",
           )}
         </p>
       )}
@@ -100,15 +100,22 @@ export function WakeSettings() {
             </button>
           </li>
           <li>
-            {t("На устройстве с Tailscale:", "On the device with Tailscale:")} <a href={client.wakeScriptUrl()}>{t("скачай wake.py", "download wake.py")}</a>, {t("положи рядом файл", "put a file")} <code>token</code> {t("с токеном и запусти:", "with the token next to it and run:")}
+            {t("На этом устройстве:", "On that device:")} <a href={client.wakeScriptUrl()}>{t("скачай wake.py", "download wake.py")}</a>, {t("положи рядом файл", "put a file")} <code>token</code> {t("с токеном и запусти:", "with the token next to it and run:")}
             <pre className="pre wake__cmd">
-              {`echo ${token || t("<токен>", "<token>")} > token\npython3 wake.py --bind ${t("<IP этого устройства в Tailscale>", "<this device's Tailscale IP>")}`}
+              {`echo ${token || t("<токен>", "<token>")} > token\npython3 wake.py`}
             </pre>
             <span className="muted">{t("Нужен Python 3.8+, больше ничего. Автозапуск — в README, раздел «Пробуждение ПК».", "Needs Python 3.8+, nothing else. Autostart — see README, “Waking the PC”.")}</span>
           </li>
           <li>
             {t("Адрес будильника:", "Relay address:")}{" "}
             <input className="input mono wake__url" placeholder="http://100.x.y.z:7421" value={url} onChange={(e) => setUrl(e.target.value.trim())} />
+            <br />
+            <span className="muted">
+              {t(
+                "Через Tailscale: http://<IP устройства в Tailscale>:7421. Без Tailscale: если у устройства есть обратный прокси с HTTPS на белом IP (NAS Synology: Портал входа → Обратный прокси), заведи там отдельное имя на localhost:7421 и впиши https://<это имя>.",
+                "Over Tailscale: http://<device Tailscale IP>:7421. Without Tailscale: if the device has an HTTPS reverse proxy on a public IP (Synology NAS: Login Portal → Reverse Proxy), add a separate name there pointing to localhost:7421 and enter https://<that name>.",
+              )}
+            </span>
           </li>
         </ol>
       )}

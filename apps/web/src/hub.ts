@@ -1,5 +1,6 @@
 // Один клиент хаба на всё приложение + хуки для React.
 import { useEffect, useState, useSyncExternalStore } from "react";
+import type { SettingsSection } from "./Settings.tsx";
 import { HubClient, applyLangSetting, getLang, getLangSetting, onLangChange, type ClientState, type EngineInfo, type Lang, type LangSetting, t, locale } from "@kamharn/client";
 
 const TOKEN_KEY = "kamharn.token";
@@ -62,10 +63,12 @@ export function recall<T>(key: string): T | undefined {
 export type Route =
   | { page: "home" }
   | { page: "session"; id: string }
-  | { page: "project"; id: string }
+  /** file — сразу открыть этот файл (абсолютный путь), line — строку в нём (ссылки на файлы из чата) */
+  | { page: "project"; id: string; file?: string; line?: number }
   /** group — новая сессия сразу в группе */
   | { page: "new"; group?: string }
-  | { page: "settings" }
+  /** section — раздел настроек (без него — список разделов) */
+  | { page: "settings"; section?: SettingsSection }
   /** модели и провайдеры: ключи, подписки, свои серверы */
   | { page: "providers" }
   | { page: "mcp" }
@@ -74,8 +77,13 @@ export type Route =
   | { page: "group"; id: string };
 
 function parse(hash: string): Route {
-  const p = /^#\/s\/([^/]+)\/project$/.exec(hash);
-  if (p) return { page: "project", id: decodeURIComponent(p[1]!) };
+  const p = /^#\/s\/([^/?]+)\/project(?:\?(.*))?$/.exec(hash);
+  if (p) {
+    const q = new URLSearchParams(p[2] ?? "");
+    const file = q.get("f") ?? undefined;
+    const line = Number(q.get("l")) || undefined;
+    return { page: "project", id: decodeURIComponent(p[1]!), ...(file ? { file } : {}), ...(line ? { line } : {}) };
+  }
   const m = /^#\/s\/(.+)$/.exec(hash);
   if (m) return { page: "session", id: decodeURIComponent(m[1]!) };
   const n = /^#\/new(?:\?g=(.+))?$/.exec(hash);
@@ -83,6 +91,8 @@ function parse(hash: string): Route {
   const g = /^#\/g\/(.+)$/.exec(hash);
   if (g) return { page: "group", id: decodeURIComponent(g[1]!) };
   if (hash === "#/settings") return { page: "settings" };
+  const st = /^#\/settings\/([a-z]+)$/.exec(hash);
+  if (st) return { page: "settings", section: st[1] as SettingsSection };
   if (hash === "#/providers") return { page: "providers" };
   if (hash === "#/mcp") return { page: "mcp" };
   if (hash === "#/skills") return { page: "skills" };
@@ -104,7 +114,7 @@ export function go(route: Route): void {
     route.page === "session"
       ? `#/s/${encodeURIComponent(route.id)}`
       : route.page === "project"
-        ? `#/s/${encodeURIComponent(route.id)}/project`
+        ? `#/s/${encodeURIComponent(route.id)}/project` + (route.file ? `?${new URLSearchParams({ f: route.file, ...(route.line ? { l: String(route.line) } : {}) })}` : "")
         : route.page === "new"
           ? route.group
             ? `#/new?g=${encodeURIComponent(route.group)}`
@@ -112,7 +122,7 @@ export function go(route: Route): void {
           : route.page === "group"
             ? `#/g/${encodeURIComponent(route.id)}`
           : route.page === "settings"
-            ? "#/settings"
+            ? `#/settings${route.section ? `/${route.section}` : ""}`
             : route.page === "providers"
               ? "#/providers"
               : route.page === "mcp" || route.page === "skills"

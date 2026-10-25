@@ -26,12 +26,13 @@ import type {
   SessionGroup,
   HubNotice,
   TelegramProxy,
+  RemoteSettings,
   McpServer,
   EngineId,
   NewSessionPrefs,
   LangSetting,
 } from "@kamharn/protocol";
-import { LOCAL_DEVICE, isLoopback, type Auth } from "./auth.ts";
+import { LOCAL_DEVICE, isLoopback, tunnelSockets, type Auth } from "./auth.ts";
 import { REPO_ROOT, type ConfigStore } from "./config.ts";
 import type { Db } from "./db.ts";
 import type { Presence } from "./presence.ts";
@@ -50,6 +51,7 @@ const WAKE_SCRIPT = join(REPO_ROOT, "scripts", "nas-wake", "wake.py");
 import type { Skills } from "./skills.ts";
 import type { Updates } from "./updates.ts";
 import type { ClaudeLogin } from "./claudeauth.ts";
+import { checkPublicUrl, probeHub, type RemoteTunnel } from "./remote.ts";
 
 export interface ServerDeps {
   /** отправка пушей (FCM); undefined — не настроено */
@@ -87,6 +89,8 @@ export interface ServerDeps {
   updates?: Updates;
   /** вход в Claude Code: статус, свой API-ключ, окно входа на ПК */
   claudeLogin?: ClaudeLogin;
+  /** удалённый доступ через свой VPS (SSH-туннель) */
+  remote?: Pick<RemoteTunnel, "status" | "save" | "remove" | "test">;
   /** усыпить ПК через delayMs; undefined — не умеем (тесты, не Windows) */
   sleep?: { schedule(delayMs: number): void };
 }
@@ -184,7 +188,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   app.decorateRequest("deviceId", "");
   app.addHook("onRequest", async (req, reply) => {
-    const local = isLoopback(req.socket.remoteAddress) && !proxied(req);
+    const local = isLoopback(req.socket.remoteAddress) && !proxied(req) && !tunnelSockets.has(req.socket);
     // DNS rebinding: страница evil.com, перепривязанная на 127.0.0.1, шлёт свой Host и для браузера она same-origin
     if (local && !localName(hostOf(req)[0])) return reply.code(403).send({ error: L("Чужой адрес в заголовке Host", "Foreign address in the Host header") });
     // решаем по маршруту, который нашёл роутер, а не по сырому url: роутер раскодирует %XX, и /%61pi/… — это /api/…
@@ -262,8 +266,11 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   // адрес и токен сервиса пробуждения: приложение запоминает их, пока ПК не спит
   // пробуждение ПК: /api/wake — приложению (как будить), /api/wake/setup — экрану настройки
   const wake = new Wake(config, {
-    // адрес хаба в Tailscale: будильник в локалке видит ПК по нему (хаб слушает Tailscale и localhost)
-    pcHost: () => deps.urls().map((u) => new URL(u).hostname).find((h) => /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(h)),
+    // по какому адресу будильник проверяет, проснулся ли ПК: домашний (он в той же сети), иначе Tailscale
+    pcHost: () => {
+      const hosts = deps.urls().map((u) => new URL(u).hostname);
+      return hosts.find((h) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h)) ?? hosts.find((h) => /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(h));
+    },
     // порт, на котором хаб реально слушает (в конфиге бывает 0 — «любой свободный»)
     pcPort: () => Number(deps.urls()[0] ? new URL(deps.urls()[0]!).port : 0) || config.config.port,
   });
@@ -276,6 +283,31 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   app.get("/api/wake/script", async (_req, reply) => {
     reply.header("content-type", "text/x-python; charset=utf-8").header("content-disposition", 'attachment; filename="wake.py"');
     return readFileSync(WAKE_SCRIPT, "utf8");
+  });
+  // удалённый доступ через свой сервер (VPS)
+  const remote = () => {
+    if (!deps.remote) throw new HttpError(409, L("Удалённый доступ недоступен", "Remote access is unavailable"));
+    return deps.remote;
+  };
+  app.get("/api/remote", async () => remote().status());
+  app.put<{ Body: Partial<RemoteSettings> }>("/api/remote", async (req) => remote().save(req.body ?? {}));
+  app.delete("/api/remote", async () => remote().remove());
+  app.post("/api/remote/test", async () => remote().test());
+  // адреса хаба: все известные (в QR) и свои за прокси (NAS, роутер с белым IP)
+  app.get("/api/addresses", async () => ({ urls: deps.urls(), publicUrls: config.config.publicUrls ?? [] }));
+  app.put<{ Body: { publicUrls?: unknown } }>("/api/addresses", async (req) => {
+    const list = req.body?.publicUrls;
+    if (!Array.isArray(list) || !list.every((x) => typeof x === "string")) throw new HttpError(400, L("publicUrls: массив адресов", "publicUrls: an array of addresses"));
+    const clean = [...new Set(list.filter((x) => x.trim()).map(checkPublicUrl))];
+    if (clean.length > 10) throw new HttpError(400, L("Не больше 10 адресов", "No more than 10 addresses"));
+    config.setPublicUrls(clean);
+    return { urls: deps.urls(), publicUrls: clean };
+  });
+  // проверка снаружи — только известных адресов хаба, а не любых (хаб не должен ходить куда попросят)
+  app.post<{ Body: { url?: string } }>("/api/addresses/check", async (req) => {
+    const url = String(req.body?.url ?? "");
+    if (!deps.urls().includes(url)) throw new HttpError(400, L("Это не адрес хаба", "That's not a hub address"));
+    return probeHub(url, deps.version);
   });
   app.post<{ Body: { delaySec?: number } }>("/api/hub/restart", async (req) => {
     if (!deps.restart?.supervised) {
