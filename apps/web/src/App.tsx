@@ -4,6 +4,7 @@ import { Chat } from "./Chat.tsx";
 import { Project } from "./Project.tsx";
 import { NewSession } from "./NewSession.tsx";
 import { Settings } from "./Settings.tsx";
+import { Task, Tasks, taskIcon } from "./Tasks.tsx";
 import { Group } from "./Group.tsx";
 import { Providers } from "./Providers.tsx";
 import { Mcp } from "./Mcp.tsx";
@@ -47,7 +48,8 @@ export function App() {
           </div>
         )}
         <UpdateBanner />
-        <SessionList sessions={state.sessions} groups={state.groups} activeId={route.page === "session" || route.page === "project" ? route.id : undefined} />
+        <TasksLink active={route.page === "tasks" || route.page === "task"} />
+        <SessionList sessions={state.sessions.filter((s) => !s.taskId)} groups={state.groups} activeId={route.page === "session" || route.page === "project" ? route.id : undefined} />
       </aside>
       <main className="main">
         {route.page === "session" && <Chat key={route.id} id={route.id} />}
@@ -56,6 +58,8 @@ export function App() {
         {route.page === "settings" && <Settings key={route.section ?? ""} section={route.section} />}
         {route.page === "group" && <Group key={route.id} id={route.id} />}
         {route.page === "providers" && <Providers />}
+        {route.page === "tasks" && <Tasks />}
+        {route.page === "task" && <Task key={route.id} id={route.id} />}
         {route.page === "mcp" && <Mcp />}
         {route.page === "skills" && <Skills />}
         <ModelPickHost />
@@ -72,6 +76,21 @@ export function App() {
 const DRAG = "text/kamharn-session";
 
 /** Сессии по группам: сворачивание, перетаскивание сессий между группами, «+» — новая сессия в группе. */
+/** Кнопка «Задачи» с числом тех, что ждут решения. */
+function TasksLink({ active }: { active: boolean }) {
+  const { tasks } = useHub();
+  const running = tasks.filter((x) => x.status === "running" || x.status === "waiting_limit").length;
+  const ready = tasks.filter((x) => x.status === "ready").length;
+  return (
+    <button className={`taskslink ${active ? "taskslink--on" : ""}`} onClick={() => go({ page: "tasks" })}>
+      <span>🗂 {t("Задачи", "Tasks")}</span>
+      <span className="muted">
+        {running ? `${taskIcon("running")} ${running}` : ""} {ready ? <b className="tasks__icon--ready">{taskIcon("ready")} {ready}</b> : ""}
+      </span>
+    </button>
+  );
+}
+
 function SessionList({ sessions, groups, activeId }: { sessions: SessionInfo[]; groups: SessionGroup[]; activeId?: string }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => recall("groups.collapsed") ?? {});
   const [over, setOver] = useState<string>();

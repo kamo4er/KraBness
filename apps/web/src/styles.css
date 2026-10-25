@@ -374,3 +374,20 @@ section .update__notes { margin: 6px 0 10px; }
 .settings-list__icon { font-size: 22px; width: 28px; text-align: center; }
 .settings-list__text { flex: 1; display: flex; flex-direction: column; gap: 2px; }
 .settings-list__arrow { font-size: 22px; color: var(--muted); }
+
+/* автопроверка */
+.btn--on { border-color: var(--ok); color: var(--ok); }
+.check__note { padding: 4px 10px 6px 34px; font-size: 13px; color: var(--muted); }
+.checks__menu { width: 380px; max-width: 90vw; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.checks__menu p { margin: 0; }
+
+/* задачи */
+.taskslink { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 8px 12px; background: none; border: 0; border-bottom: 1px solid var(--line); color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.taskslink:hover, .taskslink--on { background: var(--bg2); }
+.tasks__item { display: flex; align-items: center; gap: 12px; width: 100%; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; padding: 2px 0; }
+.tasks__icon { width: 18px; text-align: center; color: var(--muted); }
+.tasks__icon--running { color: var(--accent); }
+.tasks__icon--ready { color: var(--warn, #e3b341); }
+.tasks__icon--merged { color: var(--ok); }
+.tasks__icon--failed { color: var(--err); }
+.task__goal { white-space: pre-wrap; }

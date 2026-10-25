@@ -100,6 +100,8 @@ export function PartView({ part }: { part: Part }) {
       return <ToolCard part={part} />;
     case "file":
       return <FileChip fileId={part.fileId} name={part.name} mime={part.mime} size={part.size} />;
+    case "check":
+      return <CheckCard part={part} />;
     case "compaction":
       return <CompactionMark part={part} />;
   }
@@ -153,6 +155,49 @@ function ToolCard({ part }: { part: Extract<Part, { type: "tool" }> }) {
           <ToolInput tool={part.tool} input={input} />
           {part.output ? <Pre text={part.output} /> : null}
           {part.error ? <Pre text={part.error} color={C.err} /> : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+const fmtMs = (ms: number) => (ms < 1000 ? `${ms} ${t("мс", "ms")}` : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} ${t("с", "s")}`);
+
+/** Автопроверка хаба: команды проекта после хода агента. Упавшая раскрыта сразу. */
+function CheckCard({ part }: { part: Extract<Part, { type: "check" }> }) {
+  const failed = part.results.find((r) => r.code !== 0);
+  const [open, setOpen] = useState<boolean>();
+  const shown = open ?? part.status === "failed";
+  const total = part.results.reduce((a, r) => a + r.ms, 0);
+  const color = part.status === "passed" ? C.ok : part.status === "failed" ? C.err : C.muted;
+  const title =
+    part.status === "running"
+      ? t("идёт…", "running…")
+      : part.status === "passed"
+        ? `${t("прошли", "passed")} · ${fmtMs(total)}`
+        : part.status === "failed" && failed
+          ? `${t("упало", "failed")}: ${failed.command}`
+          : t("остановлена", "stopped");
+  return (
+    <View style={pt.tool}>
+      <Pressable style={pt.toolHead} onPress={() => setOpen(!shown)}>
+        {part.status === "running" ? <ActivityIndicator size="small" color={C.muted} /> : <Text style={[pt.toolStatus, { color }]}>{part.status === "passed" ? "✓" : part.status === "failed" ? "✗" : "■"}</Text>}
+        <Text style={pt.toolName}>{t("автопроверка", "auto-check")}</Text>
+        <Text style={pt.toolTitle} numberOfLines={1}>
+          {title}
+        </Text>
+      </Pressable>
+      {part.note ? <Text style={[S.muted, { paddingHorizontal: 10, paddingBottom: 6 }]}>{part.note}</Text> : null}
+      {shown ? (
+        <View style={pt.toolBody}>
+          {part.results.map((r, i) => (
+            <View key={i} style={{ gap: 4 }}>
+              <Text style={{ fontFamily: mono, fontSize: 12, color: r.code === 0 ? C.ok : C.err }}>
+                {r.code === 0 ? "✓" : "✗"} {r.command} <Text style={S.muted}>· {fmtMs(r.ms)}</Text>
+              </Text>
+              {r.code !== 0 && r.output ? <Pre text={r.output} color={C.err} /> : null}
+            </View>
+          ))}
         </View>
       ) : null}
     </View>

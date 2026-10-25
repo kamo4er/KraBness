@@ -47,6 +47,48 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
   );
 });
 
+const fmtMs = (ms: number) => (ms < 1000 ? `${ms} ${t("мс", "ms")}` : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} ${t("с", "s")}`);
+
+/** Автопроверка хаба: команды проекта после хода агента. Упавшая раскрыта сразу. */
+function CheckCard({ part }: { part: Extract<Part, { type: "check" }> }) {
+  const failed = part.results.find((r) => r.code !== 0);
+  const [open, setOpen] = useState<boolean>();
+  const shown = open ?? part.status === "failed";
+  const total = part.results.reduce((a, r) => a + r.ms, 0);
+  const icon = part.status === "running" ? <span className="spinner" /> : part.status === "passed" ? "✓" : part.status === "failed" ? "✗" : "■";
+  const title =
+    part.status === "running"
+      ? t("Проверка идёт…", "Checking…")
+      : part.status === "passed"
+        ? `${t("Проверки прошли", "Checks passed")} · ${fmtMs(total)}`
+        : part.status === "failed" && failed
+          ? `${t("Упало", "Failed")}: ${failed.command}${failed.timedOut ? ` (${t("не уложилась во время", "timed out")})` : ` (${t("код", "code")} ${failed.code ?? "?"})`}`
+          : t("Проверка остановлена", "Check stopped");
+  return (
+    <div className={`tool check tool--${part.status === "passed" ? "completed" : part.status === "failed" ? "error" : "running"}`}>
+      <button className="tool__head" onClick={() => setOpen(!shown)}>
+        <span className="tool__status">{icon}</span>
+        <span className="tool__name">{t("автопроверка", "auto-check")}</span>
+        <span className="tool__title">{title}</span>
+      </button>
+      {part.note && <div className="check__note">{part.note}</div>}
+      {shown && (
+        <div className="tool__body">
+          {part.results.map((r, i) => (
+            <div key={i}>
+              <div className="mono">
+                {r.code === 0 ? "✓" : "✗"} {r.command} <span className="muted">· {fmtMs(r.ms)}</span>
+              </div>
+              {r.code !== 0 && r.output && <pre className="pre pre--err">{r.output}</pre>}
+            </div>
+          ))}
+          {part.status === "running" && <div className="muted">{t("идёт следующая команда…", "running the next command…")}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PartView({ part }: { part: Part }) {
   switch (part.type) {
     case "text":
@@ -57,6 +99,8 @@ export function PartView({ part }: { part: Part }) {
       return <ToolCard part={part} />;
     case "file":
       return <FileChip fileId={part.fileId} name={part.name} mime={part.mime} size={part.size} />;
+    case "check":
+      return <CheckCard part={part} />;
     case "compaction":
       return <CompactionMark part={part} />;
   }

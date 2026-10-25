@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { limitView, resolveFileRef, speakableText, type FileRef, type ClaudeLimits, type EngineInfo, type ListeningPort, type WorktreeStatus, type MessageView, type ModelRef, type PermissionMode, type SlashCommand, t, locale } from "@kamharn/client";
+import { limitView, resolveFileRef, speakableText, type FileRef, type ChecksConfig, type ClaudeLimits, type EngineInfo, type ListeningPort, type WorktreeStatus, type MessageView, type ModelRef, type PermissionMode, type SlashCommand, t, locale } from "@kamharn/client";
 import { client, fmtSize, go, useEngines, useHub, useQuickPrompts } from "./hub.ts";
 import { pickOpencodeModel } from "./ModelPick.tsx";
 import { MODES } from "./NewSession.tsx";
@@ -121,6 +121,74 @@ export function Chat({ id }: { id: string }) {
   );
 }
 
+/** Автопроверка: вкл/выкл, команды проекта (сохранённые или предложенные хабом), прогон сейчас. */
+function ChecksButton({ sessionId, on }: { sessionId: string; on: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [cfg, setCfg] = useState<ChecksConfig>();
+  const [text, setText] = useState("");
+  const [msg, setMsg] = useState<string>();
+  const toggleOpen = () => {
+    setOpen(!open);
+    setMsg(undefined);
+    if (!open)
+      void client.checks(sessionId).then(
+        (c) => (setCfg(c), setText((c.commands.length ? c.commands : c.suggested).join("\n"))),
+        (e: Error) => setMsg(e.message),
+      );
+  };
+  const list = () => text.split("\n").map((x) => x.trim()).filter(Boolean);
+  const save = async () => {
+    const c = await client.setChecks(sessionId, list());
+    setCfg(c);
+    return c;
+  };
+  const run = (f: () => Promise<unknown>) => void f().catch((e: Error) => setMsg(e.message));
+  return (
+    <div className="preview">
+      <button className={`btn btn--icon ${on ? "btn--on" : ""}`} title={t("Автопроверка: после хода агента — тесты и сборка", "Auto-check: tests and build after each agent turn")} onClick={toggleOpen}>
+        ✓
+      </button>
+      {open && (
+        <div className="slash preview__menu checks__menu">
+          <label className="row">
+            <input
+              type="checkbox"
+              checked={on}
+              onChange={() =>
+                run(async () => {
+                  // включаем — сразу сохраняем команды (иначе нечего гонять)
+                  if (!on && !cfg?.commands.length) await save();
+                  await client.updateSession(sessionId, { autoCheck: !on });
+                })
+              }
+            />
+            {t("Автопроверка после каждого хода агента", "Auto-check after every agent turn")}
+          </label>
+          <p className="muted">
+            {t(
+              "Хаб гоняет команды по очереди в папке сессии. Упало — отправляет ошибку агенту (до 3 раз), прошло — пришлёт «готово».",
+              "The hub runs the commands in the session folder one by one. A failure goes back to the agent (up to 3 times), a pass sends you “done”.",
+            )}
+          </p>
+          {cfg ? <textarea className="input mono" rows={3} value={text} placeholder="npm test" onChange={(e) => setText(e.target.value)} /> : !msg && <p className="muted">{t("загрузка…", "loading…")}</p>}
+          {cfg && !cfg.commands.length && cfg.suggested.length > 0 && <p className="muted">{t("Предложены по файлам проекта — проверь и сохрани.", "Suggested from the project files — check and save.")}</p>}
+          {cfg && !cfg.commands.length && !cfg.suggested.length && <p className="muted">{t("Не нашёл тестов в проекте — впиши команды сам, по одной в строке.", "No tests found in the project — enter commands yourself, one per line.")}</p>}
+          <div className="row">
+            <button className="btn btn--small" onClick={() => run(async () => (await save(), setMsg(t("Сохранено", "Saved"))))}>
+              {t("Сохранить", "Save")}
+            </button>
+            <button className="btn btn--small" disabled={!list().length} onClick={() => run(async () => (await save(), await client.runChecks(sessionId), setOpen(false)))}>
+              {t("Проверить сейчас", "Check now")}
+            </button>
+          </div>
+          {cfg && <p className="muted mono">{cfg.directory}</p>}
+          {msg && <p className="muted">{msg}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChatHeader({ info, engines, limits }: { info: NonNullable<ReturnType<typeof useHub>["sessions"][number]>; engines?: EngineInfo[]; limits?: ClaudeLimits }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(info.title);
@@ -193,6 +261,7 @@ function ChatHeader({ info, engines, limits }: { info: NonNullable<ReturnType<ty
       </div>
       {info.worktree && <WorktreeButton sessionId={info.id} branch={info.worktree.branch} base={info.worktree.base} busy={info.status === "busy"} />}
       <PreviewButton sessionId={info.id} />
+      <ChecksButton sessionId={info.id} on={!!info.autoCheck} />
       <button
         className="btn btn--icon"
         title={t("Сжать контекст: агент перескажет разговор сам себе и освободит место", "Compact the context: the agent summarizes the conversation for itself and frees up space")}
@@ -485,7 +554,7 @@ function Composer({
 
 /** Продолжить на бесплатной модели: новая opencode-сессия с выжимкой этой. */
 async function handoff(id: string): Promise<void> {
-  const model = await pickOpencodeModel(t("Продолжить в opencode", "Continue in opencode"), t("Продолжить", "Continue"), t("Создам сессию opencode с выжимкой этой. Эта сессия останется как есть.", "I'll create an opencode session with a summary of this one. This session stays as is."));
+  const model = await pickOpencodeModel(t("Продолжить в opencode", "Continue in opencode"), t("Продолжить", "Continue"), t("Создам сессию opencode с выжимкой этой. Эта сессия останется как есть; если она ждала сброса лимита — ждать перестанет.", "I will create an opencode session with a summary of this one. This session stays as is; if it was waiting for the limit to reset, it stops waiting."));
   if (!model) return;
   try {
     const s = await client.handoff(id, model);
@@ -614,6 +683,10 @@ function ResumeBanner({ sessionId, at }: { sessionId: string; at: number }) {
   return (
     <div className="limitbanner limitbanner--warn">
       <span>⏳ {t("Упёрлись в лимит Claude — продолжу сам в", "Hit the Claude limit — I'll continue by myself at")} {new Date(at).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" })}</span>
+      {/* простую часть можно не ждать: передать бесплатной модели (тогда Claude не проснётся — иначе двое правят одни файлы) */}
+      <button className="btn btn--small" title={t("Передать работу бесплатной модели в opencode", "Hand the work to a free model in opencode")} onClick={() => void handoff(sessionId)}>
+        {t("Не ждать", "Don't wait")}
+      </button>
       <button className="btn btn--small" onClick={() => void client.updateSession(sessionId, { resumeAt: 0 })}>
         {t("Не продолжать", "Don't continue")}
       </button>

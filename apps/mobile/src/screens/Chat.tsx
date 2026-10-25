@@ -16,6 +16,26 @@ import { C, S, mono } from "../theme.ts";
 import { dialog } from "../dialog.tsx";
 import { pickOpencodeModel } from "../modelPick.tsx";
 
+/** Автопроверка с телефона: включить с командами проекта (сохранёнными или предложенными), прогнать сейчас. Править команды удобнее в вебе. */
+async function checksMenu(id: string, on: boolean): Promise<void> {
+  const cfg = await client!.checks(id);
+  const commands = cfg.commands.length ? cfg.commands : cfg.suggested;
+  if (!commands.length) {
+    dialog(t("Нет команд проверки", "No check commands"), t("Не нашёл тестов в проекте. Задай команды в вебе на ПК: кнопка ✓ в шапке чата.", "No tests found in the project. Set the commands in the web UI on the PC: the ✓ button in the chat header."));
+    return;
+  }
+  const save = async () => {
+    if (!cfg.commands.length) await client!.setChecks(id, commands);
+  };
+  dialog(t("Автопроверка", "Auto-check"), `${commands.join("\n")}\n\n${cfg.commands.length ? "" : t("(предложены по файлам проекта)", "(suggested from the project files)")}`.trim(), [
+    on
+      ? { text: t("Выключить", "Turn off"), onPress: () => void client!.updateSession(id, { autoCheck: false }) }
+      : { text: t("Включить", "Turn on"), onPress: () => void save().then(() => client!.updateSession(id, { autoCheck: true })) },
+    { text: t("Проверить сейчас", "Check now"), onPress: () => void save().then(() => client!.runChecks(id)) },
+    { text: t("Закрыть", "Close"), style: "cancel" },
+  ]);
+}
+
 export function Chat({ id }: { id: string }) {
   const state = useHub();
   const view = state.views[id];
@@ -198,6 +218,12 @@ function Header({ info, conn, onSearch }: { info: SessionInfo; conn: ReturnType<
             dialog(info.title, undefined, [
               { text: t("Превью dev-сервера", "Dev server preview"), icon: "▶️", hint: t("открыть сайт или игру проекта в браузере", "open the project's site or game in the browser"), onPress: () => setPreview(true) },
               { text: t("Проект", "Project"), icon: "📁", hint: t("изменения, файлы, терминал", "changes, files, terminal"), onPress: () => go({ page: "project", id: info.id }) },
+              {
+                text: info.autoCheck ? t("Автопроверка: вкл", "Auto-check: on") : t("Автопроверка: выкл", "Auto-check: off"),
+                icon: "✅",
+                hint: t("после хода агента — тесты и сборка, ошибки уходят агенту", "tests and build after each agent turn, failures go back to the agent"),
+                onPress: () => void checksMenu(info.id, !!info.autoCheck).catch(fail),
+              },
               {
                 text: t("Сжать контекст", "Compact the context"),
                 icon: "🗜",
@@ -516,7 +542,7 @@ const st = StyleSheet.create({
   input: { flex: 1, maxHeight: 180, minHeight: 42, paddingTop: 10 },
 });
 
-/** Продолжить в opencode: выбрать модель → новая сессия с выжимкой этой (эта остаётся как есть). */
+/** Продолжить в opencode: выбрать модель → новая сессия с выжимкой этой (эта остаётся как есть, но ждать сброса лимита перестаёт). */
 function handoff(id: string): void {
   void pickOpencodeModel(t("Продолжить в opencode — модель", "Continue in opencode — model")).then((model) => {
     if (!model) return;
@@ -598,6 +624,8 @@ function ResumeBanner({ sessionId, at }: { sessionId: string; at: number }) {
   return (
     <View style={st.banner}>
       <Text style={[S.text, { flex: 1, fontSize: 13 }]}>⏳ {t("Упёрлись в лимит Claude — продолжу сам в", "Hit the Claude limit — I'll continue by myself at")} {new Date(at).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" })}</Text>
+      {/* простую часть можно не ждать: передать бесплатной модели (тогда Claude не проснётся — иначе двое правят одни файлы) */}
+      <Btn small title={t("Не ждать", "Don't wait")} onPress={() => handoff(sessionId)} />
       <Btn small title={t("Не продолжать", "Don't continue")} onPress={() => void client?.updateSession(sessionId, { resumeAt: 0 })} />
     </View>
   );

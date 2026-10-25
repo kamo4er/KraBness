@@ -65,6 +65,8 @@ export class SessionManager extends EventEmitter<HubEvents> {
 
   /** fileId уже показанных исходящих файлов (чтобы повторный upsert tool-части не дублировал файл) */
   private shownFiles = new Set<string>();
+  /** сообщения хаба (автопроверка), для которых message.upserted уже отправлен */
+  private hubMessages = new Set<string>();
 
   private claudeProjectsDir: string;
   private lastLimits?: ClaudeLimits;
@@ -180,6 +182,7 @@ export class SessionManager extends EventEmitter<HubEvents> {
       lastSeq: 0,
       ...(worktree ? { worktree } : {}),
       ...(req.groupId && this.db.getGroup(req.groupId) ? { groupId: req.groupId } : {}),
+      ...(req.taskId ? { taskId: req.taskId } : {}),
     };
     this.db.insertSession(row);
     this.byEngineSession.set(key(req.engine, engineSessionId), row.id);
@@ -212,9 +215,10 @@ export class SessionManager extends EventEmitter<HubEvents> {
   }
 
   /** Переименование, смена модели (со следующего сообщения) и режима подтверждений (сразу). */
-  async update(id: string, patch: { title?: string; model?: ModelRef; permissionMode?: PermissionMode; resumeAt?: number; groupId?: string | null }): Promise<SessionInfo> {
+  async update(id: string, patch: { title?: string; model?: ModelRef; permissionMode?: PermissionMode; resumeAt?: number; groupId?: string | null; autoCheck?: boolean }): Promise<SessionInfo> {
     const s = this.get(id);
-    const p: Partial<Pick<SessionInfo, "title" | "model" | "permissionMode" | "resumeAt" | "groupId">> = {};
+    const p: Partial<Pick<SessionInfo, "title" | "model" | "permissionMode" | "resumeAt" | "groupId" | "autoCheck">> = {};
+    if (typeof patch.autoCheck === "boolean" && patch.autoCheck !== !!s.autoCheck) p.autoCheck = patch.autoCheck;
     // перенос в группу ("" или null — без группы)
     if (patch.groupId !== undefined) {
       const g = patch.groupId || "";
@@ -234,6 +238,16 @@ export class SessionManager extends EventEmitter<HubEvents> {
     }
     if (Object.keys(p).length) this.append(id, { type: "session.updated", patch: p });
     return publicSession(this.get(id));
+  }
+
+  /** Запись самого хаба в ленту сессии (автопроверка): сообщение создаётся при первой части, повторная часть с тем же id — обновление. */
+  hubPart(sessionId: string, messageId: string, part: Part, createdAt = Date.now()): void {
+    this.get(sessionId);
+    if (!this.hubMessages.has(messageId)) {
+      this.hubMessages.add(messageId);
+      this.append(sessionId, { type: "message.upserted", message: { id: messageId, role: "assistant", createdAt } });
+    }
+    this.append(sessionId, { type: "part.upserted", messageId, part });
   }
 
   /** Автопродолжение после лимита: когда сессия сама продолжит (0 — не ждёт). */
@@ -272,6 +286,8 @@ export class SessionManager extends EventEmitter<HubEvents> {
   async handoff(id: string, model?: ModelRef): Promise<SessionInfo> {
     const s = this.get(id);
     const digest = sessionDigest(publicSession(s), this.db.eventsAfter(id, 0));
+    // работу продолжают в той же папке: пусть Claude не просыпается после лимита и не правит те же файлы
+    if (s.resumeAt) this.setResumeAt(id, 0);
     const ns = await this.create({ engine: "opencode", directory: s.directory, permissionMode: s.permissionMode, title: `→ ${s.title}`.slice(0, 200), ...(model ? { model } : {}), ...(s.groupId ? { groupId: s.groupId } : {}) });
     await this.prompt(ns.id, handoffPrompt(digest));
     return ns;

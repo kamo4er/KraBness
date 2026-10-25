@@ -16,6 +16,9 @@ export type Route =
   /** свои MCP-серверы и скиллы */
   | { page: "mcp" }
   | { page: "skills" }
+  | { page: "tasks" }
+  /** одна задача: шаги, отчёт, решение */
+  | { page: "task"; id: string }
   /** экран группы сессий: id "new" — создать */
   | { page: "group"; id: string };
 

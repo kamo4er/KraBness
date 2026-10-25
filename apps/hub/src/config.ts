@@ -32,6 +32,10 @@ export interface HubConfig {
   newSession?: Partial<NewSessionPrefs>;
   /** прокси для Bot API; живёт отдельно от токена — смена бота его не сбрасывает */
   telegramProxy?: TelegramProxy;
+  /** задачи: сколько работает одновременно (остальные ждут очереди) */
+  tasks?: { parallel?: number };
+  /** команды автопроверки по папкам проектов (ключ — папка проекта, у ветки сессии — основная) */
+  checks?: Record<string, string[]>;
   /** адреса хаба за своим обратным прокси (NAS, роутер с белым IP): попадают в известные адреса и QR */
   publicUrls?: string[];
   /** удалённый доступ через свой VPS (remote.ts): SSH-туннель + HTTPS на сервере */
@@ -153,6 +157,19 @@ export class ConfigStore {
   setWake(w: HubConfig["wake"] | undefined): void {
     if (w) this.config.wake = w;
     else delete this.config.wake;
+    this.save();
+  }
+
+  setTasksParallel(n: number): void {
+    this.config.tasks = { ...this.config.tasks, parallel: n };
+    this.save();
+  }
+
+  setChecks(directory: string, commands: string[]): void {
+    const all = { ...(this.config.checks ?? {}) };
+    if (commands.length) all[directory] = commands;
+    else delete all[directory];
+    this.config.checks = all;
     this.save();
   }
 

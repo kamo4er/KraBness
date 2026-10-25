@@ -1,6 +1,6 @@
 // SQLite-хранилище хаба: сессии, журнал событий (для replay), устройства, файлы.
 import { DatabaseSync } from "node:sqlite";
-import type { EngineId, ModelRef, PermissionMode, SessionEvent, SessionInfo, SessionStatus, StoredEvent, SessionGroup, WorktreeInfo } from "@kamharn/protocol";
+import type { TaskInfo, EngineId, ModelRef, PermissionMode, SessionEvent, SessionInfo, SessionStatus, StoredEvent, SessionGroup, WorktreeInfo } from "@kamharn/protocol";
 import { L } from "./lang.ts";
 
 export interface SessionRow extends SessionInfo {
@@ -82,7 +82,11 @@ export class Db {
     if (!cols.includes("resume_at")) this.db.exec(`ALTER TABLE sessions ADD COLUMN resume_at INTEGER NOT NULL DEFAULT 0`);
     if (!cols.includes("worktree_json")) this.db.exec(`ALTER TABLE sessions ADD COLUMN worktree_json TEXT`);
     if (!cols.includes("group_id")) this.db.exec(`ALTER TABLE sessions ADD COLUMN group_id TEXT`);
+    if (!cols.includes("auto_check")) this.db.exec(`ALTER TABLE sessions ADD COLUMN auto_check INTEGER NOT NULL DEFAULT 0`);
+    if (!cols.includes("task_id")) this.db.exec(`ALTER TABLE sessions ADD COLUMN task_id TEXT`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, icon TEXT, prompt TEXT, sort INTEGER NOT NULL DEFAULT 0)`);
+    // задача целиком лежит в JSON: её поля меняются чаще, чем стоит плодить колонки
+    this.db.exec(`CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, json TEXT NOT NULL)`);
   }
 
   close(): void {
@@ -94,13 +98,13 @@ export class Db {
   insertSession(s: SessionRow): void {
     this.db
       .prepare(
-        `INSERT INTO sessions (id, engine, engine_session_id, directory, title, model_json, permission_mode, status, created_at, updated_at, last_seq, worktree_json, group_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sessions (id, engine, engine_session_id, directory, title, model_json, permission_mode, status, created_at, updated_at, last_seq, worktree_json, group_id, task_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(s.id, s.engine, s.engineSessionId, s.directory, s.title, JSON.stringify(s.model), s.permissionMode, s.status, s.createdAt, s.updatedAt, s.lastSeq, s.worktree ? JSON.stringify(s.worktree) : null, s.groupId || null);
+      .run(s.id, s.engine, s.engineSessionId, s.directory, s.title, JSON.stringify(s.model), s.permissionMode, s.status, s.createdAt, s.updatedAt, s.lastSeq, s.worktree ? JSON.stringify(s.worktree) : null, s.groupId || null, s.taskId || null);
   }
 
-  updateSession(id: string, patch: Partial<Pick<SessionInfo, "title" | "status" | "model" | "permissionMode" | "updatedAt" | "resumeAt" | "groupId">>): void {
+  updateSession(id: string, patch: Partial<Pick<SessionInfo, "title" | "status" | "model" | "permissionMode" | "updatedAt" | "resumeAt" | "groupId" | "autoCheck">>): void {
     const sets: string[] = [];
     const vals: (string | number)[] = [];
     if (patch.title !== undefined) sets.push("title = ?"), vals.push(patch.title);
@@ -111,6 +115,7 @@ export class Db {
     if (patch.resumeAt !== undefined) sets.push("resume_at = ?"), vals.push(patch.resumeAt);
     // "" — убрать из группы
     if (patch.groupId !== undefined) sets.push("group_id = ?"), vals.push(patch.groupId || (null as unknown as string));
+    if (patch.autoCheck !== undefined) sets.push("auto_check = ?"), vals.push(patch.autoCheck ? 1 : 0);
     if (!sets.length) return;
     this.db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`).run(...vals, id);
   }
@@ -125,6 +130,25 @@ export class Db {
   }
 
   // ---------- группы сессий ----------
+
+  // ---------- tasks ----------
+
+  listTasks(): TaskInfo[] {
+    return (this.db.prepare(`SELECT json FROM tasks ORDER BY created_at DESC`).all() as Row[]).map((r) => JSON.parse(String(r.json)) as TaskInfo);
+  }
+
+  getTask(id: string): TaskInfo | undefined {
+    const r = this.db.prepare(`SELECT json FROM tasks WHERE id = ?`).get(id) as Row | undefined;
+    return r ? (JSON.parse(String(r.json)) as TaskInfo) : undefined;
+  }
+
+  saveTask(t: TaskInfo): void {
+    this.db.prepare(`INSERT INTO tasks (id, created_at, json) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json`).run(t.id, t.createdAt, JSON.stringify(t));
+  }
+
+  deleteTask(id: string): void {
+    this.db.prepare(`DELETE FROM tasks WHERE id = ?`).run(id);
+  }
 
   listGroups(): SessionGroup[] {
     return (this.db.prepare(`SELECT * FROM groups ORDER BY sort, name`).all() as Row[]).map((r) => ({
@@ -263,6 +287,8 @@ function toSession(r: Row): SessionRow {
     ...(Number(r.resume_at) > 0 ? { resumeAt: Number(r.resume_at) } : {}),
     ...(r.worktree_json ? { worktree: JSON.parse(String(r.worktree_json)) as WorktreeInfo } : {}),
     ...(r.group_id ? { groupId: String(r.group_id) } : {}),
+    ...(r.task_id ? { taskId: String(r.task_id) } : {}),
+    ...(Number(r.auto_check) ? { autoCheck: true } : {}),
   };
 }
 

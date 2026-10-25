@@ -2,14 +2,14 @@
   "expo": {
     "name": "KraBness",
     "slug": "kamharn",
-    "version": "0.1.42",
+    "version": "0.1.43",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#111318",
     "android": {
       "package": "dev.kamharn.app",
-      "versionCode": 43,
+      "versionCode": 44,
       "adaptiveIcon": {
         "backgroundColor": "#111318",
         "foregroundImage": "./assets/android-icon-foreground.png",

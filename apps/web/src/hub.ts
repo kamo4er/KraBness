@@ -72,6 +72,9 @@ export type Route =
   /** модели и провайдеры: ключи, подписки, свои серверы */
   | { page: "providers" }
   | { page: "mcp" }
+  | { page: "tasks" }
+  /** одна задача: шаги, отчёт, решение */
+  | { page: "task"; id: string }
   | { page: "skills" }
   /** экран группы: id "new" — создать */
   | { page: "group"; id: string };
@@ -95,6 +98,9 @@ function parse(hash: string): Route {
   if (st) return { page: "settings", section: st[1] as SettingsSection };
   if (hash === "#/providers") return { page: "providers" };
   if (hash === "#/mcp") return { page: "mcp" };
+  if (hash === "#/tasks") return { page: "tasks" };
+  const tk = /^#\/t\/(.+)$/.exec(hash);
+  if (tk) return { page: "task", id: decodeURIComponent(tk[1]!) };
   if (hash === "#/skills") return { page: "skills" };
   return { page: "home" };
 }
@@ -125,6 +131,10 @@ export function go(route: Route): void {
             ? `#/settings${route.section ? `/${route.section}` : ""}`
             : route.page === "providers"
               ? "#/providers"
+            : route.page === "tasks"
+              ? "#/tasks"
+              : route.page === "task"
+                ? `#/t/${encodeURIComponent(route.id)}`
               : route.page === "mcp" || route.page === "skills"
                 ? `#/${route.page}`
                 : "";

@@ -10,6 +10,7 @@ import { Btn, connLabel, ConnDot, EngineBadge, Limits, ListSheet } from "../ui.t
 import { C, S } from "../theme.ts";
 import { WakePanel } from "../WakePanel.tsx";
 import { HubUpdateBanner } from "../HubUpdate.tsx";
+import { taskIcon } from "./Tasks.tsx";
 import { dialog } from "../dialog.tsx";
 
 function when(ts: number): string {
@@ -43,6 +44,7 @@ export function Sessions() {
         <Text style={S.h1}>KraBness</Text>
         <ConnDot conn={state.conn} />
         <Text style={[S.muted, { flex: 1 }]}>{state.conn === "online" ? "" : connLabel(state.conn)}</Text>
+        <TasksBtn />
         <Btn small kind="primary" title={t("+ Новая", "+ New")} onPress={() => go({ page: "new" })} />
         <Btn small title="⚙" onPress={() => go({ page: "settings" })} />
       </View>
@@ -69,9 +71,18 @@ export function Sessions() {
           <WakePanel hint={t("ПК не отвечает. Может, он спит?", "The PC doesn't answer. Maybe it's asleep?")} />
         </View>
       ) : null}
-      <Grouped sessions={state.sessions} groups={state.groups} empty={state.conn === "online" ? t("Сессий пока нет. Нажми «+ Новая».", "No sessions yet. Tap “+ New”.") : t("Загрузка…", "Loading…")} />
+      <Grouped sessions={state.sessions.filter((x) => !x.taskId)} groups={state.groups} empty={state.conn === "online" ? t("Сессий пока нет. Нажми «+ Новая».", "No sessions yet. Tap “+ New”.") : t("Загрузка…", "Loading…")} />
     </View>
   );
+}
+
+/** Кнопка «Задачи»: показывает, сколько ждёт решения (иначе сколько работает). */
+function TasksBtn() {
+  const { tasks } = useHub();
+  const ready = tasks.filter((x) => x.status === "ready").length;
+  const running = tasks.filter((x) => x.status === "running" || x.status === "waiting_limit").length;
+  const badge = ready ? `${taskIcon("ready")}${ready}` : running ? `${taskIcon("running")}${running}` : "";
+  return <Btn small title={`🗂${badge ? " " + badge : ""}`} onPress={() => go({ page: "tasks" })} />;
 }
 
 /** Секции по группам (свёрнутые — без сессий) и «Без группы» в конце. */

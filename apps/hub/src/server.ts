@@ -26,6 +26,9 @@ import type {
   SessionGroup,
   HubNotice,
   TelegramProxy,
+  CreateTaskRequest,
+  TaskAction,
+  TaskInfo,
   RemoteSettings,
   McpServer,
   EngineId,
@@ -52,8 +55,14 @@ import type { Skills } from "./skills.ts";
 import type { Updates } from "./updates.ts";
 import type { ClaudeLogin } from "./claudeauth.ts";
 import { checkPublicUrl, probeHub, type RemoteTunnel } from "./remote.ts";
+import type { AutoCheck } from "./checks.ts";
+import type { Orchestrator } from "./orchestrator.ts";
 
 export interface ServerDeps {
+  /** автопроверка: команды проекта и прогон после хода агента */
+  autoCheck?: AutoCheck;
+  /** задачи: конвейер над сессиями */
+  tasks?: Orchestrator;
   /** отправка пушей (FCM); undefined — не настроено */
   push?: { enabled: boolean };
   /** провайдеры моделей opencode (нет — opencode выключен или ещё не стартовал) */
@@ -616,7 +625,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const { engineSessionId: _, ...info } = sessions.get(req.params.id);
     return info;
   });
-  app.patch<{ Params: { id: string }; Body: { title?: string; model?: ModelRef; permissionMode?: PermissionMode; resumeAt?: number; groupId?: string | null } }>("/api/sessions/:id", async (req) =>
+  app.patch<{ Params: { id: string }; Body: { title?: string; model?: ModelRef; permissionMode?: PermissionMode; resumeAt?: number; groupId?: string | null; autoCheck?: boolean } }>("/api/sessions/:id", async (req) =>
     sessions.update(req.params.id, req.body ?? {}),
   );
   app.delete<{ Params: { id: string } }>("/api/sessions/:id", async (req) => {
@@ -696,6 +705,52 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     await sessions.abort(req.params.id);
     return { ok: true };
   });
+  // автопроверка: команды проекта сессии (хранятся по основной папке проекта) и прогон по кнопке
+  const checks = () => {
+    if (!deps.autoCheck) throw new HttpError(409, L("Автопроверка недоступна", "Auto-check is unavailable"));
+    return deps.autoCheck;
+  };
+  // ---------- задачи ----------
+  const tasks = () => {
+    if (!deps.tasks) throw new HttpError(409, L("Задачи недоступны", "Tasks are unavailable"));
+    return deps.tasks;
+  };
+  app.get("/api/tasks", async () => tasks().list());
+  app.get("/api/tasks/parallel", async () => ({ parallel: config.config.tasks?.parallel ?? 2 }));
+  app.put<{ Body: { parallel?: number } }>("/api/tasks/parallel", async (req) => {
+    const n = Number(req.body?.parallel);
+    if (!Number.isInteger(n) || n < 1 || n > 5) throw new HttpError(400, L("Одновременно: от 1 до 5 задач", "At once: 1 to 5 tasks"));
+    config.setTasksParallel(n);
+    return { parallel: n };
+  });
+  app.post<{ Body: CreateTaskRequest }>("/api/tasks", async (req) => {
+    const b = req.body ?? ({} as CreateTaskRequest);
+    const dir = config.resolveAllowed(String(b.directory ?? ""));
+    return tasks().create({ ...b, directory: dir });
+  });
+  app.get<{ Params: { id: string } }>("/api/tasks/:id", async (req) => tasks().get(req.params.id));
+  app.post<{ Params: { id: string }; Body: TaskAction }>("/api/tasks/:id/action", async (req) => tasks().act(req.params.id, req.body ?? ({} as TaskAction)));
+  app.delete<{ Params: { id: string } }>("/api/tasks/:id", async (req) => {
+    await tasks().remove(req.params.id);
+    return { ok: true };
+  });
+
+  app.get<{ Params: { id: string } }>("/api/sessions/:id/checks", async (req) => checks().config(sessions.get(req.params.id)));
+  app.put<{ Params: { id: string }; Body: { commands?: unknown } }>("/api/sessions/:id/checks", async (req) => {
+    try {
+      return checks().setCommands(sessions.get(req.params.id), req.body?.commands);
+    } catch (e) {
+      if (e instanceof HttpError) throw e;
+      throw new HttpError(400, (e as Error).message);
+    }
+  });
+  // не ждём: тесты идут минутами, результат приходит карточкой в ленту
+  app.post<{ Params: { id: string } }>("/api/sessions/:id/checks/run", async (req) => {
+    const s = sessions.get(req.params.id);
+    if (!checks().commands(s).length) throw new HttpError(400, L("Команды проверки для этого проекта не заданы", "No check commands for this project"));
+    void checks().run(s.id, !!s.autoCheck);
+    return { ok: true };
+  });
   app.post<{ Params: { id: string } }>("/api/sessions/:id/compact", async (req) => {
     await sessions.compact(req.params.id);
     return { ok: true };
@@ -767,6 +822,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     };
     const onLimits = (limits: ClaudeLimits) => send({ t: "limits", limits });
     const onGroups = (groups: SessionGroup[]) => send({ t: "groups", groups });
+    const offTasks = deps.tasks?.onChange((list: TaskInfo[]) => send({ t: "tasks", tasks: list }));
     const onLang = (language: LangSetting) => send({ t: "language", language });
     langListeners.add(onLang);
     const offUpdate = deps.updates?.subscribe((update) => send({ t: "update", update }));
@@ -817,6 +873,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       sessions.off("delta", onDelta);
       sessions.off("limits", onLimits);
       sessions.off("groups", onGroups);
+      offTasks?.();
       langListeners.delete(onLang);
       offUpdate?.();
       offNotices?.();
@@ -824,7 +881,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     });
 
     const limits = sessions.limits;
-    send({ t: "hello", deviceId: req.deviceId, sessions: sessions.list(), groups: sessions.groups(), language: config.config.language ?? "auto", ...(limits ? { limits } : {}), ...(deps.updates ? { update: deps.updates.status() } : {}) });
+    send({ t: "hello", deviceId: req.deviceId, sessions: sessions.list(), groups: sessions.groups(), ...(deps.tasks ? { tasks: deps.tasks.list() } : {}), language: config.config.language ?? "auto", ...(limits ? { limits } : {}), ...(deps.updates ? { update: deps.updates.status() } : {}) });
   });
 
   // ---------- веб-UI ----------

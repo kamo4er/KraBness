@@ -23,6 +23,8 @@ export class Notifier {
     private sender: Pick<PushSender, "enabled" | "send">,
     /** пользователь в веб-UI — всё видит там, телефон не дёргаем */
     private presence?: { readonly active: boolean },
+    /** у сессии включена автопроверка — обычное «готово» молчит, итог присылает она (checks.ts) */
+    private quietDone?: (sessionId: string) => boolean,
   ) {}
 
   /** Вызывается на каждое событие журнала. */
@@ -65,7 +67,7 @@ export class Notifier {
           void this.push(sid, { message: L(`Упёрлись в лимит Claude — продолжу сам в ${at}`, `Hit the Claude limit — I'll continue by myself at ${at}`), data: { kind: "done", sessionId: sid }, tag: `done-${sid}` });
         }
         if (ev.patch.status === "busy") this.busy.add(sid);
-        if (ev.patch.status === "idle" && this.busy.delete(sid)) {
+        if (ev.patch.status === "idle" && this.busy.delete(sid) && !this.quietDone?.(sid)) {
           const text = this.lastText.get(sid);
           void this.push(sid, { message: text ? `${L("Готово", "Done")}: ${clip(text.split("\n").find((l) => l.trim()) ?? text, 120)}` : L("Готово", "Done"), data: { kind: "done", sessionId: sid }, tag: `done-${sid}` });
         }

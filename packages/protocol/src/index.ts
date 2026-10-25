@@ -74,6 +74,10 @@ export interface SessionInfo {
   worktree?: WorktreeInfo;
   /** группа в списке сессий (нет — «Без группы») */
   groupId?: string;
+  /** автопроверка: после хода агента хаб гоняет команды проверки проекта и при ошибке возвращает её агенту */
+  autoCheck?: boolean;
+  /** сессия — шаг задачи (исполнитель или ревью): в общем списке не показывается, живёт на странице задачи */
+  taskId?: string;
 }
 
 /** Группа сессий: порядок в списке и системный промпт для всех её сессий. */
@@ -114,7 +118,27 @@ export type Part =
     }
   | { type: "file"; id: string; fileId: string; name: string; mime: string; size: number }
   /** контекст агента сжат (вручную или сам, когда кончалось место): всё выше клиенты сворачивают */
-  | { type: "compaction"; id: string; trigger: "manual" | "auto"; preTokens?: number; postTokens?: number };
+  | { type: "compaction"; id: string; trigger: "manual" | "auto"; preTokens?: number; postTokens?: number }
+  /** автопроверка хаба: команды проекта после хода агента (attempt — какой круг починки) */
+  | { type: "check"; id: string; status: CheckStatus; attempt: number; maxAttempts: number; results: CheckResult[]; note?: string };
+
+export type CheckStatus = "running" | "passed" | "failed" | "stopped";
+
+/** Одна команда проверки: код выхода (null — не запустилась или убита по таймауту) и хвост вывода. */
+export interface CheckResult {
+  command: string;
+  code: number | null;
+  ms: number;
+  output: string;
+  timedOut?: boolean;
+}
+
+/** Команды проверки проекта: сохранённые и предложенные хабом по файлам проекта. */
+export interface ChecksConfig {
+  directory: string;
+  commands: string[];
+  suggested: string[];
+}
 
 export type PermissionReply = "once" | "always" | "reject";
 
@@ -155,7 +179,7 @@ export type QuestionAnswers = string[][] | null;
 
 /** Сохраняемые события сессии (получают seq и попадают в replay). */
 export type SessionEvent =
-  | { type: "session.updated"; patch: Partial<Pick<SessionInfo, "title" | "status" | "model" | "permissionMode" | "resumeAt" | "groupId">> }
+  | { type: "session.updated"; patch: Partial<Pick<SessionInfo, "title" | "status" | "model" | "permissionMode" | "resumeAt" | "groupId" | "autoCheck">> }
   | { type: "message.upserted"; message: MessageInfo }
   | { type: "part.upserted"; messageId: string; part: Part }
   | { type: "permission.asked"; request: PermissionRequest }
@@ -189,13 +213,15 @@ export type ClientMessage =
   | { t: "presence"; active: boolean };
 
 export type ServerMessage =
-  | { t: "hello"; deviceId: string; sessions: SessionInfo[]; limits?: ClaudeLimits; groups?: SessionGroup[]; language?: import("./i18n.ts").LangSetting; update?: UpdateStatus }
+  | { t: "hello"; deviceId: string; sessions: SessionInfo[]; limits?: ClaudeLimits; groups?: SessionGroup[]; tasks?: TaskInfo[]; language?: import("./i18n.ts").LangSetting; update?: UpdateStatus }
   /** статус обновлений поменялся (нашлась новая версия, идёт установка) */
   | { t: "update"; update: UpdateStatus }
   /** язык поменяли в настройках — переключиться сразу */
   | { t: "language"; language: import("./i18n.ts").LangSetting }
   /** группы сессий изменились (создали, переименовали, удалили, поменяли промпт) */
   | { t: "groups"; groups: SessionGroup[] }
+  /** задачи поменялись (статус, шаги, отчёт) */
+  | { t: "tasks"; tasks: TaskInfo[] }
   /** уведомление для приложения: показать самому, без Firebase (если на телефоне выбран такой способ) */
   | { t: "notify"; notice: HubNotice }
   /** лимиты подписки Claude обновились */
@@ -227,6 +253,8 @@ export interface CreateSessionRequest {
   worktree?: boolean;
   /** сразу в группу */
   groupId?: string;
+  /** шаг задачи (ставит хаб) */
+  taskId?: string;
 }
 
 /** Копия проекта сессии (git worktree). */
@@ -574,3 +602,94 @@ export interface QuestionReplyRequest {
 
 export * from "./reducer.ts";
 export * from "./i18n.ts";
+
+// ---------- задачи: конвейер над сессиями (orchestrator.ts) ----------
+
+/**
+ * queued — ждёт очереди или назначенного времени; running — идёт шаг; waiting_limit — исполнитель упёрся в лимит Claude и ждёт сброса;
+ * ready — готово, ждёт решения (влить / ещё круг / выбросить); merged / discarded — решено; failed — сломалось.
+ */
+export type TaskStatus = "queued" | "running" | "waiting_limit" | "ready" | "merged" | "discarded" | "failed";
+
+/** work — исполнитель делает; checks — автопроверка; review — ревью другой моделью; fix — исполнитель правит по ревью или по просьбе */
+export type TaskStepKind = "work" | "checks" | "review" | "fix";
+
+export interface TaskStep {
+  kind: TaskStepKind;
+  status: "running" | "done" | "failed" | "skipped";
+  /** сессия шага (у work/fix — сессия исполнителя, у review — своя) */
+  sessionId?: string;
+  model?: ModelRef;
+  startedAt: number;
+  finishedAt?: number;
+  note?: string;
+}
+
+export interface TaskReport {
+  /** итог исполнителя (его последний ответ) */
+  summary: string;
+  /** изменённые файлы в копии против основной ветки */
+  files: Array<{ status: string; path: string }>;
+  checks: "passed" | "failed" | "none";
+  /** ok — замечаний нет; fixed — были и исправлены (следующее ревью чистое); remarks — остались; skipped — ревью не было */
+  review: "ok" | "fixed" | "remarks" | "skipped";
+  /** последнее ревью целиком (если было) */
+  reviewText?: string;
+  /** коммит в основной ветке после «Влить» */
+  commit?: string;
+}
+
+export interface TaskInfo {
+  id: string;
+  title: string;
+  /** что сделать — как написал пользователь */
+  goal: string;
+  /** папка проекта, как её выбрали */
+  directory: string;
+  status: TaskStatus;
+  /** запустить не раньше этого времени (мс); нет — как дойдёт очередь */
+  startAt?: number;
+  createdAt: number;
+  updatedAt: number;
+  workerSessionId?: string;
+  /** сессия ревью (переиспользуется между кругами) */
+  reviewSessionId?: string;
+  /** чем кончилась автопроверка последнего шага */
+  checksResult?: "passed" | "failed";
+  /** вердикт последнего ревью */
+  reviewVerdict?: "ok" | "fixed" | "remarks";
+  /** текст последнего ревью */
+  reviewText?: string;
+  /** копия проекта задачи (ветка) */
+  worktree?: WorktreeInfo;
+  /** движок исполнителя; у старых задач нет — значит claude */
+  workerEngine?: EngineId;
+  workerModel?: ModelRef;
+  /** модель ревью (opencode); нет — без ревью */
+  /** движок ревьюера; у старых задач нет — значит opencode */
+  reviewEngine?: EngineId;
+  reviewModel?: ModelRef;
+  steps: TaskStep[];
+  /** сколько ревью уже было */
+  reviews: number;
+  report?: TaskReport;
+  error?: string;
+}
+
+export interface CreateTaskRequest {
+  goal: string;
+  /** движок исполнителя; не задан — Claude, если подключён, иначе opencode */
+  workerEngine?: EngineId;
+  /** движок ревьюера; не задан — opencode */
+  reviewEngine?: EngineId;
+  directory: string;
+  title?: string;
+  workerModel?: ModelRef;
+  /** модель ревью; null — без ревью; не задана — модель opencode по умолчанию */
+  reviewModel?: ModelRef | null;
+  /** запустить не раньше этого времени (мс) — например, ночью */
+  startAt?: number;
+}
+
+/** «Влить» в основную ветку, «Ещё круг» с комментарием, «Выбросить» изменения */
+export type TaskAction = { action: "merge" } | { action: "more"; comment: string } | { action: "discard" };

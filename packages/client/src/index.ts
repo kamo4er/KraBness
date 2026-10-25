@@ -27,6 +27,10 @@ import {
   type SkillInfo,
   type WakeRuntime,
   type RemoteSettings,
+  type ChecksConfig,
+  type TaskInfo,
+  type CreateTaskRequest,
+  type TaskAction,
   type RemoteStatus,
   type NewSessionPrefs,
   type WakeSetup,
@@ -47,6 +51,7 @@ export { speakableText, SPEECH_MAX } from "./speech.ts";
 export { splitArgs, joinArgs, parsePairs } from "./args.ts";
 export { ago, baseName } from "./format.ts";
 export { parseFileRef, resolveFileRef, type FileRef } from "./paths.ts";
+export { engineUsable, engineName, modelKey, parseModelKey, modelOptions, defaultTaskModels, type EngineModelOption } from "./taskModels.ts";
 export { t, tn, locale, getLang, getLangSetting, applyLangSetting, onLangChange } from "./i18n.ts";
 import { applyLangSetting, locale } from "./i18n.ts";
 
@@ -58,6 +63,8 @@ export interface ClientState {
   sessions: SessionInfo[];
   /** группы сессий в списке */
   groups: SessionGroup[];
+  /** задачи (конвейер над сессиями) */
+  tasks: TaskInfo[];
   views: Record<string, SessionView>;
   /** лимиты подписки Claude (последние известные) */
   limits?: ClaudeLimits;
@@ -120,7 +127,7 @@ export class HubClient {
   private closed = false;
   private present = false;
   private noticeListeners = new Set<(n: HubNotice) => void>();
-  state: ClientState = { conn: "connecting", sessions: [], groups: [], views: {}, versions: {} };
+  state: ClientState = { conn: "connecting", sessions: [], groups: [], tasks: [], views: {}, versions: {} };
 
   constructor(public baseUrl: string, public token?: string) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
@@ -276,10 +283,13 @@ export class HubClient {
     switch (m.t) {
       case "hello":
         applyLangSetting(m.language);
-        this.set({ conn: "online", deviceId: m.deviceId, sessions: m.sessions, groups: m.groups ?? [], ...(m.limits ? { limits: m.limits } : {}), ...(m.update ? { update: m.update } : {}) });
+        this.set({ conn: "online", deviceId: m.deviceId, sessions: m.sessions, groups: m.groups ?? [], tasks: m.tasks ?? [], ...(m.limits ? { limits: m.limits } : {}), ...(m.update ? { update: m.update } : {}) });
         break;
       case "groups":
         this.set({ groups: m.groups });
+        break;
+      case "tasks":
+        this.set({ tasks: m.tasks });
         break;
       case "language":
         applyLangSetting(m.language);
@@ -364,7 +374,7 @@ export class HubClient {
   engines = () => this.api<EngineInfo[]>("GET", "/api/engines");
   createSession = (req: CreateSessionRequest) => this.api<SessionInfo>("POST", "/api/sessions", req);
   /** resumeAt: 0 — отменить автопродолжение после лимита; groupId: null — убрать из группы */
-  updateSession = (id: string, patch: { title?: string; model?: ModelRef; permissionMode?: PermissionMode; resumeAt?: 0; groupId?: string | null }) =>
+  updateSession = (id: string, patch: { title?: string; model?: ModelRef; permissionMode?: PermissionMode; resumeAt?: 0; groupId?: string | null; autoCheck?: boolean }) =>
     this.api<SessionInfo>("PATCH", `/api/sessions/${id}`, patch);
   deleteSession = (id: string) => this.api("DELETE", `/api/sessions/${id}`);
   prompt = (id: string, text: string, fileIds: string[] = []) => this.api("POST", `/api/sessions/${id}/prompt`, { text, fileIds });
@@ -465,6 +475,9 @@ export class HubClient {
   removeRemote = () => this.api<RemoteStatus>("DELETE", "/api/remote");
   testRemote = () => this.api<{ ok: true; ms: number }>("POST", "/api/remote/test", {});
   addresses = () => this.api<{ urls: string[]; publicUrls: string[] }>("GET", "/api/addresses");
+  checks = (id: string) => this.api<ChecksConfig>("GET", `/api/sessions/${id}/checks`);
+  setChecks = (id: string, commands: string[]) => this.api<ChecksConfig>("PUT", `/api/sessions/${id}/checks`, { commands });
+  runChecks = (id: string) => this.api("POST", `/api/sessions/${id}/checks/run`, {});
   setPublicUrls = (publicUrls: string[]) => this.api<{ urls: string[]; publicUrls: string[] }>("PUT", "/api/addresses", { publicUrls });
   checkAddress = (url: string) => this.api<{ ok: true; ms: number }>("POST", "/api/addresses/check", { url });
 
@@ -485,6 +498,14 @@ export class HubClient {
   createGroup = (g: { name: string; icon?: string; prompt?: string }) => this.api<SessionGroup>("POST", "/api/groups", g);
   updateGroup = (id: string, g: { name?: string; icon?: string; prompt?: string; sort?: number }) => this.api<SessionGroup>("PATCH", `/api/groups/${id}`, g);
   deleteGroup = (id: string) => this.api("DELETE", `/api/groups/${id}`);
+
+  tasks = () => this.api<TaskInfo[]>("GET", "/api/tasks");
+  createTask = (req: CreateTaskRequest) => this.api<TaskInfo>("POST", "/api/tasks", req);
+  task = (id: string) => this.api<TaskInfo>("GET", `/api/tasks/${id}`);
+  taskAction = (id: string, a: TaskAction) => this.api<TaskInfo>("POST", `/api/tasks/${id}/action`, a);
+  deleteTask = (id: string) => this.api("DELETE", `/api/tasks/${id}`);
+  tasksParallel = () => this.api<{ parallel: number }>("GET", "/api/tasks/parallel");
+  setTasksParallel = (parallel: number) => this.api<{ parallel: number }>("PUT", "/api/tasks/parallel", { parallel });
   /** перенести сессию в группу (null — без группы); список обновится у всех по событию сессии */
   moveSession = (id: string, groupId: string | null) => this.updateSession(id, { groupId });
   /** отдельная ветка сессии: сколько сделано, влить одним коммитом в основную, выбросить */

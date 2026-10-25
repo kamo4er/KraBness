@@ -44,7 +44,7 @@ export function useConn(): Conn | null {
   );
 }
 
-const EMPTY: ClientState = { conn: "offline", sessions: [], groups: [], views: {}, versions: {} };
+const EMPTY: ClientState = { conn: "offline", sessions: [], groups: [], tasks: [], views: {}, versions: {} };
 const noop = () => () => {};
 
 export function useHub(): ClientState {

@@ -64,6 +64,11 @@ test("handoff: новая opencode-сессия в той же папке, пе�
   assert.deepEqual(ns.model, { providerId: "opencode", modelId: "free" }, "без выбора — модель по умолчанию");
   const chosen = await sessions.handoff(s.id, { providerId: "zai", modelId: "glm-5" });
   assert.deepEqual(chosen.model, { providerId: "zai", modelId: "glm-5" });
+
+  // ждали сброса лимита и передали работу: Claude не должен проснуться и править те же файлы
+  sessions.setResumeAt(s.id, Date.now() + 3600_000);
+  await sessions.handoff(s.id);
+  assert.equal(sessions.get(s.id).resumeAt ?? 0, 0, "ожидание лимита снято");
 });
 
 test("review: дифф в промпте, режим «спрашивать всё»; без изменений — понятная ошибка", async () => {

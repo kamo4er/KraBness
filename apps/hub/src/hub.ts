@@ -27,6 +27,8 @@ import { Skills } from "./skills.ts";
 import { Updates } from "./updates.ts";
 import { ClaudeLogin } from "./claudeauth.ts";
 import { RemoteTunnel } from "./remote.ts";
+import { AutoCheck } from "./checks.ts";
+import { Orchestrator } from "./orchestrator.ts";
 import { tunnelSockets } from "./auth.ts";
 import { buildServer } from "./server.ts";
 import { L } from "./lang.ts";
@@ -96,7 +98,12 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   // пуши: ключ сервисного аккаунта Firebase лежит рядом с конфигом (в git не попадает)
   const push = new PushSender(join(dirname(config.path), "firebase-service-account.json"), log);
   const presence = new Presence();
-  const notifier = new Notifier(db, push, presence);
+  // автопроверка создаётся сразу после — уведомления спрашивают её, молчать ли про «готово»
+  let autoCheck: AutoCheck | undefined;
+  const notifier = new Notifier(db, push, presence, (sid) => autoCheck?.active(sid) ?? false);
+  autoCheck = new AutoCheck({ sessions, config, notify: (sid, m) => notifier.notify(sid, m), log });
+  // задачи: конвейер над сессиями (исполнитель → проверки → ревью → отчёт)
+  const tasks = new Orchestrator({ sessions, db, config, autoCheck, notify: (sid, m) => notifier.notify(sid, m), log });
   // уведомления в свой Telegram-бот (если настроен): кнопки подтверждения и ответ агенту реплаем
   const telegram = new TelegramBot(
     config,
@@ -168,6 +175,8 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   const allUrls = () => [...urls, ...(config.config.publicUrls ?? []), ...remote.publicUrls()];
   const app = await buildServer({
     sessions, auth, config, db, files, push, presence, previews, terminal, telegram, version: VERSION,
+    autoCheck,
+    tasks,
     notices: (cb) => notifier.subscribe(cb),
     mcpServers,
     skills: opts.skillsDir === null ? undefined : new Skills(opts.skillsDir),
@@ -269,6 +278,7 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   localBase = `http://127.0.0.1:${port}`;
   // после listen: просроченный «Продолжай» может уйти сразу, а движкам уже нужен адрес MCP
   autoResume.start();
+  tasks.start();
   telegram.start();
 
   if (cfg.engines.opencode.enabled) {
@@ -310,6 +320,8 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
       if (restartTimer) clearTimeout(restartTimer);
       if (sleepTimer) clearTimeout(sleepTimer);
       updates.close();
+      autoCheck.close();
+      tasks.close();
       remote.close();
       autoResume.close();
       terminal.close();
