@@ -51,7 +51,7 @@ export { speakableText, SPEECH_MAX } from "./speech.ts";
 export { splitArgs, joinArgs, parsePairs } from "./args.ts";
 export { ago, baseName } from "./format.ts";
 export { parseFileRef, resolveFileRef, type FileRef } from "./paths.ts";
-export { engineUsable, engineName, modelKey, parseModelKey, modelOptions, defaultTaskModels, type EngineModelOption } from "./taskModels.ts";
+export { engineUsable, engineName, modelKey, parseModelKey, modelOptions, optionReady, defaultTaskModels, type EngineModelOption } from "./taskModels.ts";
 export { t, tn, locale, getLang, getLangSetting, applyLangSetting, onLangChange } from "./i18n.ts";
 import { applyLangSetting, locale } from "./i18n.ts";
 
@@ -374,7 +374,7 @@ export class HubClient {
   engines = () => this.api<EngineInfo[]>("GET", "/api/engines");
   createSession = (req: CreateSessionRequest) => this.api<SessionInfo>("POST", "/api/sessions", req);
   /** resumeAt: 0 — отменить автопродолжение после лимита; groupId: null — убрать из группы */
-  updateSession = (id: string, patch: { title?: string; model?: ModelRef; permissionMode?: PermissionMode; resumeAt?: 0; groupId?: string | null; autoCheck?: boolean }) =>
+  updateSession = (id: string, patch: { title?: string; model?: ModelRef; permissionMode?: PermissionMode; resumeAt?: 0; groupId?: string | null; autoCheck?: boolean; effort?: string }) =>
     this.api<SessionInfo>("PATCH", `/api/sessions/${id}`, patch);
   deleteSession = (id: string) => this.api("DELETE", `/api/sessions/${id}`);
   prompt = (id: string, text: string, fileIds: string[] = []) => this.api("POST", `/api/sessions/${id}/prompt`, { text, fileIds });

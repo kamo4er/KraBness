@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { ago, baseName, type ClaudeTranscript, type EngineId, type FsEntry, type ModelRef, type NewSessionPrefs, type PermissionMode, t } from "@kamharn/client";
 import { client, recall, remember, useEngines, useHub } from "../store.ts";
+import { EffortPicker, effortKey } from "../effort.tsx";
 import { back, replace } from "../nav.ts";
 import { Btn, Picker } from "../ui.tsx";
 import { C, S } from "../theme.ts";
@@ -41,6 +42,10 @@ export function NewSession({ group: initialGroup }: { group?: string }) {
 
   const info = engines?.find((e) => e.id === engine);
   const models = info?.models ?? [];
+  // уровень рассуждений — свой у каждой модели, помним последний выбор для модели
+  const efforts = models.find((m) => key(m) === model)?.efforts ?? [];
+  const [effort, setEffort] = useState("");
+  useEffect(() => setEffort((model && recall<string>(effortKey(model))) || ""), [model]);
 
   // модель: как у группы → из настроек → последняя для движка → дефолт движка → первая рабочая
   useEffect(() => {
@@ -74,8 +79,10 @@ export function NewSession({ group: initialGroup }: { group?: string }) {
         ...(title.trim() ? { title: title.trim() } : {}),
         ...(branch ? { worktree: true } : {}),
         ...(group ? { groupId: group } : {}),
+        ...(effort && efforts.includes(effort) ? { effort } : {}),
       });
       remember(`model.${engine}`, model);
+      remember(effortKey(model), effort);
       remember("dir", dir);
       remember("mode", mode);
       replace({ page: "session", id: s.id });
@@ -116,6 +123,7 @@ export function NewSession({ group: initialGroup }: { group?: string }) {
           onChange={setModel}
           style={st.picker}
         />
+        <EffortPicker efforts={efforts} value={effort} onChange={setEffort} style={[st.picker, { marginTop: 8 }]} />
 
         <Text style={S.h3}>{t("Папка", "Folder")}</Text>
         <FolderPicker value={dir} onChange={setDir} />

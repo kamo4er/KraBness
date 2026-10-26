@@ -83,6 +83,7 @@ export class Db {
     if (!cols.includes("worktree_json")) this.db.exec(`ALTER TABLE sessions ADD COLUMN worktree_json TEXT`);
     if (!cols.includes("group_id")) this.db.exec(`ALTER TABLE sessions ADD COLUMN group_id TEXT`);
     if (!cols.includes("auto_check")) this.db.exec(`ALTER TABLE sessions ADD COLUMN auto_check INTEGER NOT NULL DEFAULT 0`);
+    if (!cols.includes("effort")) this.db.exec(`ALTER TABLE sessions ADD COLUMN effort TEXT`);
     if (!cols.includes("task_id")) this.db.exec(`ALTER TABLE sessions ADD COLUMN task_id TEXT`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, icon TEXT, prompt TEXT, sort INTEGER NOT NULL DEFAULT 0)`);
     // задача целиком лежит в JSON: её поля меняются чаще, чем стоит плодить колонки
@@ -98,13 +99,13 @@ export class Db {
   insertSession(s: SessionRow): void {
     this.db
       .prepare(
-        `INSERT INTO sessions (id, engine, engine_session_id, directory, title, model_json, permission_mode, status, created_at, updated_at, last_seq, worktree_json, group_id, task_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sessions (id, engine, engine_session_id, directory, title, model_json, permission_mode, status, created_at, updated_at, last_seq, worktree_json, group_id, task_id, effort)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(s.id, s.engine, s.engineSessionId, s.directory, s.title, JSON.stringify(s.model), s.permissionMode, s.status, s.createdAt, s.updatedAt, s.lastSeq, s.worktree ? JSON.stringify(s.worktree) : null, s.groupId || null, s.taskId || null);
+      .run(s.id, s.engine, s.engineSessionId, s.directory, s.title, JSON.stringify(s.model), s.permissionMode, s.status, s.createdAt, s.updatedAt, s.lastSeq, s.worktree ? JSON.stringify(s.worktree) : null, s.groupId || null, s.taskId || null, s.effort || null);
   }
 
-  updateSession(id: string, patch: Partial<Pick<SessionInfo, "title" | "status" | "model" | "permissionMode" | "updatedAt" | "resumeAt" | "groupId" | "autoCheck">>): void {
+  updateSession(id: string, patch: Partial<Pick<SessionInfo, "title" | "status" | "model" | "permissionMode" | "updatedAt" | "resumeAt" | "groupId" | "autoCheck" | "effort">>): void {
     const sets: string[] = [];
     const vals: (string | number)[] = [];
     if (patch.title !== undefined) sets.push("title = ?"), vals.push(patch.title);
@@ -116,6 +117,8 @@ export class Db {
     // "" — убрать из группы
     if (patch.groupId !== undefined) sets.push("group_id = ?"), vals.push(patch.groupId || (null as unknown as string));
     if (patch.autoCheck !== undefined) sets.push("auto_check = ?"), vals.push(patch.autoCheck ? 1 : 0);
+    // "" — по умолчанию модели
+    if (patch.effort !== undefined) sets.push("effort = ?"), vals.push(patch.effort || (null as unknown as string));
     if (!sets.length) return;
     this.db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`).run(...vals, id);
   }
@@ -289,6 +292,7 @@ function toSession(r: Row): SessionRow {
     ...(r.group_id ? { groupId: String(r.group_id) } : {}),
     ...(r.task_id ? { taskId: String(r.task_id) } : {}),
     ...(Number(r.auto_check) ? { autoCheck: true } : {}),
+    ...(r.effort ? { effort: String(r.effort) } : {}),
   };
 }
 

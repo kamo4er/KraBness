@@ -1,7 +1,7 @@
 // Выбор моделей для задачи в клиентах: умолчания и ключи вариантов.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { defaultTaskModels, modelKey, modelOptions, parseModelKey, type EngineInfo } from "@kamharn/client";
+import { defaultTaskModels, modelKey, modelOptions, optionReady, parseModelKey, type EngineInfo } from "@kamharn/client";
 
 const claude = (loggedIn: boolean): EngineInfo => ({
   id: "claude",
@@ -34,9 +34,17 @@ test("умолчания: Claude подключён — делает он, ре�
   assert.deepEqual(defaultTaskModels([]), {});
 });
 
-test("варианты: без недоступных движков и спящих локальных моделей; ключ с «/» в имени модели", () => {
-  const keys = modelOptions([claude(false), opencode]).map((o) => o.key);
-  assert.deepEqual(keys, ["opencode|opencode/free", "opencode|opencode/glm"]);
+test("варианты: без недоступных движков; спящая локальная модель видна, но не выбирается; ключ с «/» в имени модели", () => {
+  const opts = modelOptions([claude(false), opencode]);
+  assert.deepEqual(
+    opts.map((o) => o.key),
+    ["opencode|opencode/free", "opencode|lmstudio/qwen/coder", "opencode|opencode/glm"],
+  );
+  assert.equal(optionReady(opts, "opencode|lmstudio/qwen/coder"), false, "не в сети — выбрать нельзя");
+  assert.equal(optionReady(opts, "opencode|opencode/glm"), true);
+  // спящая модель не становится умолчанием, даже если стоит первой
+  const sleepy: EngineInfo = { ...opencode, models: [opencode.models[1]!, ...opencode.models], defaultModel: { providerId: "lmstudio", modelId: "qwen/coder" } };
+  assert.equal(defaultTaskModels([sleepy]).worker, "opencode|opencode/free");
   const k = modelKey("opencode", { providerId: "lmstudio", modelId: "qwen/coder" });
   assert.deepEqual(parseModelKey(k), { engine: "opencode", model: { providerId: "lmstudio", modelId: "qwen/coder" } });
   assert.equal(parseModelKey("gpt|x/y"), undefined);

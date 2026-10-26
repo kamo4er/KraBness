@@ -292,6 +292,8 @@ export class OpencodeEngine implements Engine {
             tools: m.capabilities?.toolcall ?? undefined,
             free: m.cost ? m.cost.input === 0 && m.cost.output === 0 : undefined,
             ...(offline ? { offline: true } : {}),
+            // варианты модели = уровни рассуждений (у каждой модели свои: low/high/max, none/minimal…)
+            ...(m.variants && Object.keys(m.variants).length ? { efforts: Object.keys(m.variants) } : {}),
           });
         }
       }
@@ -333,14 +335,15 @@ export class OpencodeEngine implements Engine {
     return up;
   }
 
-  async createSession(o: { directory: string; model: ModelRef; permissionMode: PermissionMode; title?: string }): Promise<string> {
+  async createSession(o: { directory: string; model: ModelRef; permissionMode: PermissionMode; title?: string; confined?: boolean }): Promise<string> {
     const s = await this.req(
       "POST",
       "/session",
       {
         ...(o.title ? { title: o.title } : {}),
         model: { id: o.model.modelId, providerID: o.model.providerId },
-        permission: PERMISSION_RULES[o.permissionMode],
+        // правила режима ниже не трогают external_directory, поэтому запрет переживает смену режима
+        permission: [...PERMISSION_RULES[o.permissionMode], ...(o.confined ? [{ permission: "external_directory", pattern: "*", action: "deny" as const }] : [])],
       },
       o.directory,
     );
@@ -358,7 +361,7 @@ export class OpencodeEngine implements Engine {
     return t.directory;
   }
 
-  async prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string }): Promise<void> {
+  async prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string; effort?: string }): Promise<void> {
     let text = o.text;
     if (o.files.length) text += `\n\n[${L("Вложения от пользователя", "Attachments from the user")}: ${o.files.map((f) => f.path).join(", ")}]`;
     const parts: Json[] = [{ type: "text", text }];
@@ -370,7 +373,7 @@ export class OpencodeEngine implements Engine {
       "POST",
       `/session/${engineSessionId}/prompt_async`,
       // system — промпт группы: opencode принимает его в каждом сообщении
-      { model: { providerID: o.model.providerId, modelID: o.model.modelId }, parts, ...(o.system ? { system: o.system } : {}) },
+      { model: { providerID: o.model.providerId, modelID: o.model.modelId }, parts, ...(o.system ? { system: o.system } : {}), ...(o.effort ? { variant: o.effort } : {}) },
       this.dir(engineSessionId),
     );
   }

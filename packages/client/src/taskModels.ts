@@ -23,10 +23,16 @@ export function parseModelKey(key: string): { engine: EngineId; model: ModelRef 
   return { engine, model: { providerId, modelId: model.join("/") } };
 }
 
-/** Все модели доступных движков (локальные серверы, которые сейчас не отвечают, — мимо). */
+/**
+ * Все модели доступных движков. Локальные, чей сервер сейчас не отвечает, тоже в списке (`model.offline`):
+ * их показываем серыми, а не прячем — иначе непонятно, куда делась запущенная минуту назад модель.
+ */
 export function modelOptions(engines: EngineInfo[] | undefined): EngineModelOption[] {
-  return (engines ?? []).filter(engineUsable).flatMap((e) => e.models.filter((m) => !m.offline).map((m) => ({ key: modelKey(e.id, m), engine: e.id, model: m })));
+  return (engines ?? []).filter(engineUsable).flatMap((e) => e.models.map((m) => ({ key: modelKey(e.id, m), engine: e.id, model: m })));
 }
+
+/** Вариант можно выбрать: модель отвечает. */
+export const optionReady = (options: EngineModelOption[], key: string): boolean => options.some((o) => o.key === key && !o.model.offline);
 
 /**
  * Что выбрано по умолчанию: исполнитель — Claude, если он подключён (сильнее в коде), иначе opencode;
@@ -38,7 +44,7 @@ export function defaultTaskModels(engines: EngineInfo[] | undefined, prefs?: New
   const pick = (engine: EngineId): string | undefined => {
     const info = engines?.find((e) => e.id === engine);
     const want = prefs?.models?.[engine] ?? info?.defaultModel;
-    const mine = opts.filter((o) => o.engine === engine);
+    const mine = opts.filter((o) => o.engine === engine && !o.model.offline);
     return (want && mine.find((o) => o.key === modelKey(engine, want))?.key) ?? mine[0]?.key;
   };
   const worker = pick("claude") ?? pick("opencode");

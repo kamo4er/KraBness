@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { request } from "node:http";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import WebSocket from "ws";
@@ -34,11 +34,16 @@ const wsOpens = (url: string, headers: Record<string, string>) =>
 test("авторизацию не обойти: %XX в пути, чужой Host, чужой localhost-порт, обратный прокси", async () => {
   const base = mkdtempSync(join(tmpdir(), "kamharn-sec-"));
   mkdirSync(join(base, "Projects"));
+  // свой webDir: тест не зависит от того, собирал ли кто-то веб в этом запуске
+  const web = join(base, "dist");
+  mkdirSync(web, { recursive: true });
+  writeFileSync(join(web, "index.html"), "<html>spa</html>");
   const hub = await createHub({
     configPath: join(base, "kamharn.json"),
     skillsDir: join(base, "skills"),
     overrides: { listen: ["127.0.0.1"], port: 0, dataDir: join(base, "data"), roots: [join(base, "Projects")], engines: { opencode: { enabled: false, port: 0 }, claude: { enabled: false } } },
     log: () => {},
+    webDir: web,
   });
   const url = hub.urls[0]!;
   const host = new URL(url).host;
@@ -52,6 +57,8 @@ test("авторизацию не обойти: %XX в пути, чужой Host
     // %2F роутер не раскодирует: это не API, а запасная отдача index.html
     const slash = await fetch(url + "/api%2Fsessions", { headers: evil });
     assert.ok(!(slash.headers.get("content-type") ?? "").includes("json"), "не данные API");
+    assert.match(slash.headers.get("content-type") ?? "", /text\/html/, "SPA-запас: index.html");
+    assert.equal(await slash.text(), "<html>spa</html>");
     const ws = url.replace(/^http/, "ws");
     assert.equal(await wsOpens(`${ws}/w%73`, evil), false, "/w%73 — тот же /ws");
     assert.equal(await wsOpens(`${ws}/ws`, {}), true, "свой WebSocket работает");

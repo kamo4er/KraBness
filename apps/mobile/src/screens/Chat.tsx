@@ -15,6 +15,7 @@ import { Btn, ConnDot, EngineBadge, Limits, ListSheet, Picker } from "../ui.tsx"
 import { C, S, mono } from "../theme.ts";
 import { dialog } from "../dialog.tsx";
 import { pickOpencodeModel } from "../modelPick.tsx";
+import { EffortPicker } from "../effort.tsx";
 
 /** Автопроверка с телефона: включить с командами проекта (сохранёнными или предложенными), прогнать сейчас. Править команды удобнее в вебе. */
 async function checksMenu(id: string, on: boolean): Promise<void> {
@@ -264,6 +265,12 @@ function Header({ info, conn, onSearch }: { info: SessionInfo; conn: ReturnType<
             const m = models.find((x) => key(x) === v);
             if (m) client?.updateSession(info.id, { model: { providerId: m.providerId, modelId: m.modelId } }).catch(fail);
           }}
+        />
+        <EffortPicker
+          style={{ flex: 1 }}
+          efforts={models.find((m) => key(m) === key(info.model))?.efforts ?? []}
+          value={info.effort ?? ""}
+          onChange={(v) => client?.updateSession(info.id, { effort: v }).catch(fail)}
         />
         <Picker
           title={t("Подтверждения", "Approvals")}

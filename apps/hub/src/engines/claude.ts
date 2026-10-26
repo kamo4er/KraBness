@@ -39,6 +39,9 @@ const MODELS: Array<{ id: string; name: string }> = [
   { id: "claude-fable-5-1", name: "Claude Fable 5.1" },
 ];
 
+/** уровни claude --effort (2.1.302: low, medium, high, xhigh, max; Haiku тоже принимает) */
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
 const MODE: Record<PermissionMode, string> = { manual: "default", acceptEdits: "acceptEdits", auto: "auto" };
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
@@ -60,6 +63,8 @@ interface Sess {
   forkFrom?: string;
   /** системный промпт группы, с которым запущен процесс (--append-system-prompt) */
   system?: string;
+  /** уровень рассуждений, с которым запущен процесс (--effort) */
+  effort?: string;
   proc?: ChildProcess;
   buf: string;
   busy: boolean;
@@ -220,7 +225,7 @@ export class ClaudeEngine implements Engine {
 
   async info(): Promise<EngineInfo> {
     const { error, ...auth } = this.authInfo();
-    const models: ModelInfo[] = MODELS.map((m) => ({ engine: "claude", providerId: "anthropic", modelId: m.id, name: m.name, tools: true }));
+    const models: ModelInfo[] = MODELS.map((m) => ({ engine: "claude", providerId: "anthropic", modelId: m.id, name: m.name, tools: true, efforts: EFFORTS }));
     return {
       id: "claude",
       available: auth.installed && auth.loggedIn,
@@ -286,11 +291,9 @@ export class ClaudeEngine implements Engine {
     return s;
   }
 
-  private ensureProc(s: Sess): ChildProcess {
-    if (s.proc && s.proc.exitCode === null) return s.proc;
-    const mcpFile = join(this.opts.dataDir, "claude-mcp", `${s.id}.json`);
-    writeFileSync(mcpFile, JSON.stringify({ mcpServers: { ...this.opts.extraMcp?.(), kamharn: { type: "http", url: `${this.opts.mcpBaseUrl()}/${s.id}` } } }));
-    const args = [
+  /** Аргументы запуска claude для сессии (отдельно — чтобы проверять в тестах без настоящего CLI). */
+  procArgs(s: Sess, mcpFile: string): string[] {
+    return [
       "-p",
       "--input-format", "stream-json",
       "--output-format", "stream-json",
@@ -302,10 +305,18 @@ export class ClaudeEngine implements Engine {
       ...((typeof this.opts.userMcp === "function" ? this.opts.userMcp() : this.opts.userMcp) ? [] : ["--strict-mcp-config"]),
       "--permission-prompt-tool", "mcp__kamharn__approve",
       ...(s.system ? ["--append-system-prompt", s.system] : []),
+      ...(s.effort ? ["--effort", s.effort] : []),
       ...(this.opts.extraArgs ?? []),
       // импорт из Claude Code: продолжаем копию, исходный транскрипт (его может держать VS Code) не трогаем
       ...(s.forkFrom ? ["--resume", s.forkFrom, "--fork-session", "--session-id", s.id] : s.hasHistory ? ["--resume", s.id] : ["--session-id", s.id]),
     ];
+  }
+
+  private ensureProc(s: Sess): ChildProcess {
+    if (s.proc && s.proc.exitCode === null) return s.proc;
+    const mcpFile = join(this.opts.dataDir, "claude-mcp", `${s.id}.json`);
+    writeFileSync(mcpFile, JSON.stringify({ mcpServers: { ...this.opts.extraMcp?.(), kamharn: { type: "http", url: `${this.opts.mcpBaseUrl()}/${s.id}` } } }));
+    const args = this.procArgs(s, mcpFile);
     this.log(`${L("старт процесса", "starting process")} ${s.id.slice(0, 8)} (${s.forkFrom ? "fork " + s.forkFrom.slice(0, 8) : s.hasHistory ? "resume" : "new"}, ${s.model.modelId})`);
     const proc = spawn(this.bin, args, {
       cwd: s.directory,
@@ -366,11 +377,11 @@ export class ClaudeEngine implements Engine {
 
   /** /compact в режиме -p работает (проверено на 2.1.302): compact_boundary, затем пересказ, память сохраняется. */
   // system — промпт группы: без него prompt() решил бы, что промпт сменился, и перезапустил процесс без него
-  async compact(engineSessionId: string, o: { model: ModelRef; system?: string }): Promise<void> {
-    await this.prompt(engineSessionId, { text: "/compact", files: [], model: o.model, ...(o.system ? { system: o.system } : {}) });
+  async compact(engineSessionId: string, o: { model: ModelRef; system?: string; effort?: string }): Promise<void> {
+    await this.prompt(engineSessionId, { text: "/compact", files: [], model: o.model, ...(o.system ? { system: o.system } : {}), ...(o.effort ? { effort: o.effort } : {}) });
   }
 
-  async prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string }): Promise<void> {
+  async prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string; effort?: string }): Promise<void> {
     const s = this.sess(engineSessionId);
     if (s.model.modelId !== o.model.modelId) {
       // смена модели: перезапускаем процесс, транскрипт продолжится с --resume
@@ -380,6 +391,11 @@ export class ClaudeEngine implements Engine {
     // промпт группы задаётся при запуске процесса — сменился (или сессию перенесли в другую группу) → перезапуск
     if ((s.system ?? "") !== (o.system ?? "")) {
       s.system = o.system || undefined;
+      if (s.proc && !s.busy) this.killProc(s);
+    }
+    // уровень рассуждений тоже задаётся при запуске (--effort): сменился → перезапуск с --resume
+    if ((s.effort ?? "") !== (o.effort ?? "")) {
+      s.effort = o.effort || undefined;
       if (s.proc && !s.busy) this.killProc(s);
     }
     const proc = this.ensureProc(s);

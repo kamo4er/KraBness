@@ -20,6 +20,8 @@ export interface ModelInfo extends ModelRef {
   free?: boolean;
   /** локальный сервер модели (LM Studio, Ollama…) сейчас не отвечает */
   offline?: boolean;
+  /** уровни рассуждений, как их называет движок (claude: --effort, opencode: варианты модели); нет — модель их не знает */
+  efforts?: string[];
 }
 
 /** Что показывать в «Новой сессии»: включённые движки и что выбрано по умолчанию (настройки хаба). */
@@ -78,6 +80,8 @@ export interface SessionInfo {
   autoCheck?: boolean;
   /** сессия — шаг задачи (исполнитель или ревью): в общем списке не показывается, живёт на странице задачи */
   taskId?: string;
+  /** уровень рассуждений (из ModelInfo.efforts); нет — по умолчанию модели. Применяется со следующего сообщения */
+  effort?: string;
 }
 
 /** Группа сессий: порядок в списке и системный промпт для всех её сессий. */
@@ -179,7 +183,7 @@ export type QuestionAnswers = string[][] | null;
 
 /** Сохраняемые события сессии (получают seq и попадают в replay). */
 export type SessionEvent =
-  | { type: "session.updated"; patch: Partial<Pick<SessionInfo, "title" | "status" | "model" | "permissionMode" | "resumeAt" | "groupId" | "autoCheck">> }
+  | { type: "session.updated"; patch: Partial<Pick<SessionInfo, "title" | "status" | "model" | "permissionMode" | "resumeAt" | "groupId" | "autoCheck" | "effort">> }
   | { type: "message.upserted"; message: MessageInfo }
   | { type: "part.upserted"; messageId: string; part: Part }
   | { type: "permission.asked"; request: PermissionRequest }
@@ -255,6 +259,8 @@ export interface CreateSessionRequest {
   groupId?: string;
   /** шаг задачи (ставит хаб) */
   taskId?: string;
+  /** уровень рассуждений; нет — по умолчанию модели */
+  effort?: string;
 }
 
 /** Копия проекта сессии (git worktree). */
@@ -668,12 +674,17 @@ export interface TaskInfo {
   /** модель ревью (opencode); нет — без ревью */
   /** движок ревьюера; у старых задач нет — значит opencode */
   reviewEngine?: EngineId;
+  /** уровень рассуждений исполнителя и ревьюера; нет — по умолчанию модели */
+  workerEffort?: string;
+  reviewEffort?: string;
   reviewModel?: ModelRef;
   steps: TaskStep[];
   /** сколько ревью уже было */
   reviews: number;
   report?: TaskReport;
   error?: string;
+  /** агент задачи ждёт человека: подтверждение или вопрос (иначе задача молча стоит) */
+  asking?: { sessionId: string; kind: "permission" | "question"; text: string; at: number };
 }
 
 export interface CreateTaskRequest {
@@ -682,6 +693,9 @@ export interface CreateTaskRequest {
   workerEngine?: EngineId;
   /** движок ревьюера; не задан — opencode */
   reviewEngine?: EngineId;
+  /** уровень рассуждений исполнителя и ревьюера; нет — по умолчанию модели */
+  workerEffort?: string;
+  reviewEffort?: string;
   directory: string;
   title?: string;
   workerModel?: ModelRef;

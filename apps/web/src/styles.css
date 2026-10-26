@@ -104,7 +104,7 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 .chat__head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg2); }
 .chat__titles { min-width: 0; flex: 1; }
 .chat__title { font-size: 16px; cursor: text; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chat__meta { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
+.chat__meta { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; flex-wrap: wrap; row-gap: 4px; }
 .chat__dir { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); font-size: 12px; }
 .chat__scroll { flex: 1; overflow-y: auto; }
 .chat__messages { max-width: 860px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
@@ -391,3 +391,9 @@ section .update__notes { margin: 6px 0 10px; }
 .tasks__icon--merged { color: var(--ok); }
 .tasks__icon--failed { color: var(--err); }
 .task__goal { white-space: pre-wrap; }
+
+/* задача ждёт ответа человека */
+.tasks__asking { color: var(--warn, #e3b341); }
+.tasks__askbox { border: 1px solid var(--warn, #e3b341); border-radius: 10px; padding: 10px 12px; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; background: color-mix(in srgb, var(--warn, #e3b341) 8%, transparent); }
+.tasks__askbox .pre { margin: 0; align-self: stretch; white-space: pre-wrap; }
+.tasks__askbox p { margin: 0; }

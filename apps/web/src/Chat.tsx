@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { limitView, resolveFileRef, speakableText, type FileRef, type ChecksConfig, type ClaudeLimits, type EngineInfo, type ListeningPort, type WorktreeStatus, type MessageView, type ModelRef, type PermissionMode, type SlashCommand, t, locale } from "@kamharn/client";
 import { client, fmtSize, go, useEngines, useHub, useQuickPrompts } from "./hub.ts";
+import { EffortSelect } from "./Effort.tsx";
 import { pickOpencodeModel } from "./ModelPick.tsx";
 import { MODES } from "./NewSession.tsx";
 import { FileChip, FileRefCtx, Limits, PartView, PermissionCard, QuestionCard } from "./Parts.tsx";
@@ -234,6 +235,12 @@ function ChatHeader({ info, engines, limits }: { info: NonNullable<ReturnType<ty
               </option>
             ))}
           </select>
+          <EffortSelect
+            inline
+            efforts={models.find((m) => modelKey(m) === modelKey(info.model))?.efforts ?? []}
+            value={info.effort ?? ""}
+            onChange={(v) => void client.updateSession(info.id, { effort: v }).catch((err: Error) => alert(err.message))}
+          />
           <select
             className="select select--inline"
             title={t("Режим подтверждений, применяется сразу", "Approval mode, applies immediately")}

@@ -1,8 +1,9 @@
 // Задачи: хаб сам ведёт работу от цели до отчёта (исполнитель → проверки → ревью → правки), а в конце спрашивает решение.
 import { useEffect, useState } from "react";
-import { defaultTaskModels, engineName, modelOptions, parseModelKey, t, type EngineModelOption, type NewSessionPrefs, type TaskInfo, type TaskStep, tn } from "@kamharn/client";
+import { defaultTaskModels, engineName, modelOptions, optionReady, parseModelKey, t, type EngineInfo, type EngineModelOption, type NewSessionPrefs, type TaskInfo, type TaskStep, tn } from "@kamharn/client";
 import { client, fmtTime, go, useEngines, useHub } from "./hub.ts";
 import { FolderPicker } from "./NewSession.tsx";
+import { EffortSelect } from "./Effort.tsx";
 import { Markdown } from "./Parts.tsx";
 
 const STATUS = (): Record<TaskInfo["status"], string> => ({
@@ -68,7 +69,7 @@ export function Tasks() {
                 <span className="settings-list__text">
                   <b>{x.title}</b>
                   <span className="muted">
-                    {STATUS()[x.status]}
+                    {x.asking ? <b className="tasks__asking">✋ {t("ждёт твоего ответа", "waiting for your answer")}</b> : STATUS()[x.status]}
                     {x.status === "queued" && x.startAt ? ` (${new Date(x.startAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })})` : ""} · {fmtTime(x.updatedAt)}
                     {x.report?.files.length ? ` · ${t("файлов", "files")}: ${x.report.files.length}` : ""}
                   </span>
@@ -104,7 +105,11 @@ function Parallel() {
 }
 
 function NewTask({ onDone }: { onDone: () => void }) {
-  const engines = useEngines();
+  const loaded = useEngines();
+  // сервер локальной модели могли запустить, пока форма открыта, — перечитываем при открытии выбора
+  const [fresh, setFresh] = useState<EngineInfo[]>();
+  const engines = fresh ?? loaded;
+  const refresh = () => void client.engines().then(setFresh, () => {});
   const [goal, setGoal] = useState("");
   const [dir, setDir] = useState("");
   const [prefs, setPrefs] = useState<NewSessionPrefs>();
@@ -114,11 +119,14 @@ function NewTask({ onDone }: { onDone: () => void }) {
   const [night, setNight] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [workerEffort, setWorkerEffort] = useState(() => localStorage.getItem("task.workerEffort") ?? "");
+  const [reviewEffort, setReviewEffort] = useState(() => localStorage.getItem("task.reviewEffort") ?? "");
   const options = modelOptions(engines);
   const defs = defaultTaskModels(engines, prefs);
   // сохранённый выбор пропал (движок выключили, модель убрали) — берём умолчание
-  const workerKey = options.some((o) => o.key === worker) ? worker : (defs.worker ?? "");
-  const reviewKey = review === "none" || options.some((o) => o.key === review) ? review : (defs.review ?? "none");
+  const workerKey = optionReady(options, worker) ? worker : (defs.worker ?? "");
+  const effortsOf = (key: string) => options.find((o) => o.key === key)?.model.efforts ?? [];
+  const reviewKey = review === "none" || optionReady(options, review) ? review : (defs.review ?? "none");
   useEffect(() => void client.roots().then((r) => setDir((d) => d || r[0] || "")), []);
   useEffect(() => void client.newSessionPrefs().then(setPrefs, () => {}), []);
   const pickWorker = (v: string) => {
@@ -136,11 +144,13 @@ function NewTask({ onDone }: { onDone: () => void }) {
     try {
       const w = parseModelKey(workerKey);
       const r = parseModelKey(reviewKey);
+      const we = effortsOf(workerKey).includes(workerEffort) ? workerEffort : "";
+      const re = effortsOf(reviewKey).includes(reviewEffort) ? reviewEffort : "";
       const task = await client.createTask({
         goal,
         directory: dir,
-        ...(w ? { workerEngine: w.engine, workerModel: w.model } : {}),
-        ...(reviewKey === "none" ? { reviewModel: null } : r ? { reviewEngine: r.engine, reviewModel: r.model } : {}),
+        ...(w ? { workerEngine: w.engine, workerModel: w.model, ...(we ? { workerEffort: we } : {}) } : {}),
+        ...(reviewKey === "none" ? { reviewModel: null } : r ? { reviewEngine: r.engine, reviewModel: r.model, ...(re ? { reviewEffort: re } : {}) } : {}),
         ...(night ? { startAt: nextNight() } : {}),
       });
       go({ page: "task", id: task.id });
@@ -160,17 +170,21 @@ function NewTask({ onDone }: { onDone: () => void }) {
       <FolderPicker value={dir} onChange={setDir} />
       <h3>{t("Исполнитель", "Worker")}</h3>
       {options.length ? (
-        <select className="select" value={workerKey} onChange={(e) => pickWorker(e.target.value)}>
+        <select className="select" value={workerKey} onFocus={refresh} onChange={(e) => pickWorker(e.target.value)}>
           <ModelGroups options={options} />
         </select>
+      ) : null}
+      {options.length ? (
+        <EffortSelect efforts={effortsOf(workerKey)} value={workerEffort} onChange={(v) => (setWorkerEffort(v), localStorage.setItem("task.workerEffort", v))} />
       ) : (
         <p className="error">{t("Нет ни одного доступного движка: запусти opencode или войди в Claude Code.", "No engine is available: start opencode or sign in to Claude Code.")}</p>
       )}
       <h3>{t("Ревью", "Review")}</h3>
-      <select className="select" value={reviewKey} onChange={(e) => pickReview(e.target.value)}>
+      <select className="select" value={reviewKey} onFocus={refresh} onChange={(e) => pickReview(e.target.value)}>
         <option value="none">{t("без ревью", "no review")}</option>
         <ModelGroups options={options} />
       </select>
+      {reviewKey !== "none" && <EffortSelect efforts={effortsOf(reviewKey)} value={reviewEffort} onChange={(v) => (setReviewEffort(v), localStorage.setItem("task.reviewEffort", v))} />}
       {reviewKey !== "none" && reviewKey === workerKey ? <p className="muted">{t("Ревью той же моделью видит меньше: лучше выбрать другую.", "A review by the same model catches less: better pick another one.")}</p> : null}
       <label className="row">
         <input type="checkbox" checked={night} onChange={() => setNight(!night)} />
@@ -200,8 +214,8 @@ function ModelGroups({ options }: { options: EngineModelOption[] }) {
           {options
             .filter((o) => o.engine === e)
             .map((o) => (
-              <option key={o.key} value={o.key}>
-                {o.model.name || o.model.modelId} {o.model.free ? t("(бесплатная)", "(free)") : ""}
+              <option key={o.key} value={o.key} disabled={o.model.offline}>
+                {o.model.name || o.model.modelId} {o.model.offline ? t("(не в сети: запусти сервер модели)", "(offline: start the model server)") : o.model.free ? t("(бесплатная)", "(free)") : ""}
               </option>
             ))}
         </optgroup>
@@ -245,6 +259,31 @@ export function Task({ id }: { id: string }) {
           </p>
           <pre className="pre task__goal">{task.goal}</pre>
           {task.error && <p className="error">{task.error}</p>}
+          {task.asking && (
+            <div className="tasks__askbox">
+              <b>✋ {task.asking.kind === "permission" ? t("Агент ждёт твоего разрешения", "The agent is waiting for your permission") : t("Агент задал вопрос", "The agent asked a question")}</b>
+              {task.asking.text && <pre className="pre">{task.asking.text}</pre>}
+              <p className="muted">{t("Пока не ответишь, задача стоит.", "The task is on hold until you answer.")}</p>
+              <button className="btn btn--primary btn--small" onClick={() => go({ page: "session", id: task.asking!.sessionId })}>
+                {t("Открыть чат и ответить", "Open the chat and answer")}
+              </button>
+            </div>
+          )}
+          {(task.status === "running" || task.status === "waiting_limit" || task.status === "queued") && (
+            <div className="row">
+              <button
+                className="btn btn--danger"
+                disabled={busy}
+                onClick={() =>
+                  confirm(t("Остановить задачу? Агент прекратится, изменения в копии выбросятся. Чат останется.", "Stop the task? The agent stops and the changes in the copy are discarded. The chat stays.")) &&
+                  act(() => client.taskAction(task.id, { action: "discard" }))
+                }
+              >
+                {t("Остановить", "Stop")}
+              </button>
+              <span className="muted">{t("агент прекратится, копия откатится, чат останется", "the agent stops, the copy is rolled back, the chat stays")}</span>
+            </div>
+          )}
         </section>
 
         <section>
@@ -291,24 +330,37 @@ export function Task({ id }: { id: string }) {
           </section>
         )}
 
-        {task.status === "ready" && (
+        {(task.status === "ready" || task.status === "failed") && (
           <section>
             <h3>{t("Решение", "Decision")}</h3>
+            {task.status === "failed" && <p className="muted">{t("Задача оборвалась, но всё, что агент успел, лежит в копии проекта. Можно продолжить с того же места: агент сам посмотрит, что сделано.", "The task was interrupted, but everything the agent managed to do is in the project copy. You can continue from there: the agent will look at what's done.")}</p>}
             <div className="row">
-              <button className="btn btn--primary" disabled={busy} onClick={() => act(() => client.taskAction(task.id, { action: "merge" }))}>
-                {t("Влить в основную ветку", "Merge into the main branch")}
-              </button>
+              {task.status === "ready" ? (
+                <button className="btn btn--primary" disabled={busy} onClick={() => act(() => client.taskAction(task.id, { action: "merge" }))}>
+                  {t("Влить в основную ветку", "Merge into the main branch")}
+                </button>
+              ) : (
+                <button className="btn btn--primary" disabled={busy} onClick={() => act(async () => (await client.taskAction(task.id, { action: "more", comment }), setComment("")))}>
+                  {t("Продолжить", "Continue")}
+                </button>
+              )}
               <button className="btn btn--danger" disabled={busy} onClick={() => confirm(t("Выбросить всё, что сделала задача?", "Discard everything the task did?")) && act(() => client.taskAction(task.id, { action: "discard" }))}>
                 {t("Выбросить", "Discard")}
               </button>
             </div>
-            <p>{t("Или попросить доработать:", "Or ask for more work:")}</p>
-            <div className="row">
-              <input className="input" value={comment} placeholder={t("что доработать", "what to improve")} onChange={(e) => setComment(e.target.value)} />
-              <button className="btn" disabled={busy || !comment.trim()} onClick={() => act(async () => (await client.taskAction(task.id, { action: "more", comment }), setComment("")))}>
-                {t("Ещё круг", "One more round")}
-              </button>
-            </div>
+            {task.status === "ready" ? (
+              <>
+                <p>{t("Или попросить доработать:", "Or ask for more work:")}</p>
+                <div className="row">
+                  <input className="input" value={comment} placeholder={t("что доработать", "what to improve")} onChange={(e) => setComment(e.target.value)} />
+                  <button className="btn" disabled={busy || !comment.trim()} onClick={() => act(async () => (await client.taskAction(task.id, { action: "more", comment }), setComment("")))}>
+                    {t("Ещё круг", "One more round")}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <input className="input" value={comment} placeholder={t("подсказка агенту (не обязательно)", "a hint for the agent (optional)")} onChange={(e) => setComment(e.target.value)} />
+            )}
           </section>
         )}
 

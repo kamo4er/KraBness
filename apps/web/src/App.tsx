@@ -81,11 +81,12 @@ function TasksLink({ active }: { active: boolean }) {
   const { tasks } = useHub();
   const running = tasks.filter((x) => x.status === "running" || x.status === "waiting_limit").length;
   const ready = tasks.filter((x) => x.status === "ready").length;
+  const asking = tasks.filter((x) => x.asking).length;
   return (
     <button className={`taskslink ${active ? "taskslink--on" : ""}`} onClick={() => go({ page: "tasks" })}>
       <span>🗂 {t("Задачи", "Tasks")}</span>
       <span className="muted">
-        {running ? `${taskIcon("running")} ${running}` : ""} {ready ? <b className="tasks__icon--ready">{taskIcon("ready")} {ready}</b> : ""}
+        {asking ? <b className="tasks__asking" title={t("ждут твоего ответа", "waiting for your answer")}>✋ {asking}</b> : ""} {running ? `${taskIcon("running")} ${running}` : ""} {ready ? <b className="tasks__icon--ready">{taskIcon("ready")} {ready}</b> : ""}
       </span>
     </button>
   );

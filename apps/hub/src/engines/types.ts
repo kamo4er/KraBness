@@ -22,11 +22,21 @@ export interface Engine {
   stop(): Promise<void>;
   info(): Promise<EngineInfo>;
   /** Создаёт сессию в движке и возвращает её id. */
-  createSession(o: { directory: string; model: ModelRef; permissionMode: PermissionMode; title?: string; /** продолжить копию сессии Claude Code */ forkFrom?: string }): Promise<string>;
+  createSession(o: {
+    directory: string;
+    model: ModelRef;
+    permissionMode: PermissionMode;
+    title?: string;
+    /** продолжить копию сессии Claude Code */
+    forkFrom?: string;
+    /** агент работает только в своей папке (шаг задачи в копии проекта): за её пределы — отказ без вопроса */
+    confined?: boolean;
+  }): Promise<string>;
   /** Восстановление связи с уже существующей сессией (после перезапуска хаба). */
   attach(engineSessionId: string, o: { directory: string; model: ModelRef; permissionMode: PermissionMode; hasHistory: boolean }): void;
   /** system — системный промпт группы сессии (добавляется к стандартному) */
-  prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string }): Promise<void>;
+  /** effort — уровень рассуждений (claude: --effort, opencode: variant) */
+  prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string; effort?: string }): Promise<void>;
   abort(engineSessionId: string): Promise<void>;
   replyPermission(engineSessionId: string, requestId: string, reply: PermissionReply): Promise<void>;
   /** Ответ на вопрос агента (null — пользователь отказался отвечать). */
@@ -38,7 +48,7 @@ export interface Engine {
   /** Скиллы, о которых движок знает по последнему запуску (claude: system:init). */
   slashSkills?(): string[];
   /** Сжать контекст агента (пересказ вместо истории); ход идёт как обычный, итог — часть compaction в ленте. */
-  compact?(engineSessionId: string, o: { model: ModelRef; system?: string }): Promise<void>;
+  compact?(engineSessionId: string, o: { model: ModelRef; system?: string; effort?: string }): Promise<void>;
   /** Сессию удалили в хабе: освободить ресурсы (процессы, подписки). */
   forget(engineSessionId: string): void;
 }

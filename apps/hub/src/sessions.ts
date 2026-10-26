@@ -162,7 +162,8 @@ export class SessionManager extends EventEmitter<HubEvents> {
     }
     let engineSessionId: string;
     try {
-      engineSessionId = await engine.createSession({ directory, model, permissionMode, title: req.title });
+      // шаг задачи в копии проекта: наружу (в основную папку и дальше) агент не ходит и не спрашивает об этом
+      engineSessionId = await engine.createSession({ directory, model, permissionMode, title: req.title, ...(req.taskId && worktree ? { confined: true } : {}) });
     } catch (e) {
       if (worktree) await removeWorktree(worktree);
       throw e;
@@ -183,6 +184,7 @@ export class SessionManager extends EventEmitter<HubEvents> {
       ...(worktree ? { worktree } : {}),
       ...(req.groupId && this.db.getGroup(req.groupId) ? { groupId: req.groupId } : {}),
       ...(req.taskId ? { taskId: req.taskId } : {}),
+      ...(cleanEffort(req.effort) ? { effort: cleanEffort(req.effort) } : {}),
     };
     this.db.insertSession(row);
     this.byEngineSession.set(key(req.engine, engineSessionId), row.id);
@@ -201,7 +203,7 @@ export class SessionManager extends EventEmitter<HubEvents> {
     if (!text.trim() && !files.length) throw new HttpError(400, L("Пустое сообщение", "Empty message"));
     // промпт группы — ко всем её сессиям, со следующего сообщения
     const system = s.groupId ? this.db.getGroup(s.groupId)?.prompt : undefined;
-    await this.engine(s.engine).prompt(s.engineSessionId, { text, files, model: s.model, ...(system ? { system } : {}) });
+    await this.engine(s.engine).prompt(s.engineSessionId, { text, files, model: s.model, ...(system ? { system } : {}), ...(s.effort ? { effort: s.effort } : {}) });
   }
 
   /** Сжать контекст агента: история заменяется пересказом, в ленте появляется отметка «контекст сжат». */
@@ -211,13 +213,14 @@ export class SessionManager extends EventEmitter<HubEvents> {
     if (!engine.compact) throw new HttpError(400, L("Этот движок не умеет сжимать контекст", "This engine can't compact the context"));
     if (s.status === "busy" || s.status === "retry") throw new HttpError(409, L("Агент ещё работает — дождись или останови его", "The agent is still working — wait or stop it"));
     const system = s.groupId ? this.db.getGroup(s.groupId)?.prompt : undefined;
-    await engine.compact(s.engineSessionId, { model: s.model, ...(system ? { system } : {}) });
+    // уровень тоже: иначе claude решил бы, что он сменился, и перезапустился без него
+    await engine.compact(s.engineSessionId, { model: s.model, ...(system ? { system } : {}), ...(s.effort ? { effort: s.effort } : {}) });
   }
 
   /** Переименование, смена модели (со следующего сообщения) и режима подтверждений (сразу). */
-  async update(id: string, patch: { title?: string; model?: ModelRef; permissionMode?: PermissionMode; resumeAt?: number; groupId?: string | null; autoCheck?: boolean }): Promise<SessionInfo> {
+  async update(id: string, patch: { title?: string; model?: ModelRef; permissionMode?: PermissionMode; resumeAt?: number; groupId?: string | null; autoCheck?: boolean; effort?: string }): Promise<SessionInfo> {
     const s = this.get(id);
-    const p: Partial<Pick<SessionInfo, "title" | "model" | "permissionMode" | "resumeAt" | "groupId" | "autoCheck">> = {};
+    const p: Partial<Pick<SessionInfo, "title" | "model" | "permissionMode" | "resumeAt" | "groupId" | "autoCheck" | "effort">> = {};
     if (typeof patch.autoCheck === "boolean" && patch.autoCheck !== !!s.autoCheck) p.autoCheck = patch.autoCheck;
     // перенос в группу ("" или null — без группы)
     if (patch.groupId !== undefined) {
@@ -229,6 +232,10 @@ export class SessionManager extends EventEmitter<HubEvents> {
     if (patch.resumeAt === 0 && s.resumeAt) p.resumeAt = 0;
     if (typeof patch.title === "string" && patch.title.trim()) p.title = patch.title.trim().slice(0, 200);
     if (patch.model?.providerId && patch.model.modelId) p.model = { providerId: patch.model.providerId, modelId: patch.model.modelId };
+    // уровень рассуждений: "" — по умолчанию модели. У другой модели свой набор уровней — при смене модели сбрасываем, если новый не задан
+    const modelChanged = !!p.model && (p.model.providerId !== s.model.providerId || p.model.modelId !== s.model.modelId);
+    const effort = patch.effort !== undefined ? cleanEffort(patch.effort) : modelChanged ? "" : undefined;
+    if (effort !== undefined && effort !== (s.effort ?? "")) p.effort = effort;
     if (patch.permissionMode !== undefined) {
       if (!PERMISSION_MODES.includes(patch.permissionMode)) throw new HttpError(400, L(`Неизвестный режим ${patch.permissionMode}`, `Unknown mode ${patch.permissionMode}`));
       if (patch.permissionMode !== s.permissionMode) {
@@ -643,3 +650,8 @@ export class SessionManager extends EventEmitter<HubEvents> {
 const key = (engine: EngineId, esid: string) => `${engine}:${esid}`;
 const PERMISSION_MODES: PermissionMode[] = ["manual", "acceptEdits", "auto"];
 export const SESSION_LIST_THROTTLE_MS = 15_000;
+
+/** Уровень рассуждений из запроса: короткое слово (low, high, xhigh…), иначе "" — по умолчанию модели. */
+function cleanEffort(v: unknown): string {
+  return typeof v === "string" && /^[a-z0-9_-]{1,20}$/i.test(v.trim()) ? v.trim() : "";
+}

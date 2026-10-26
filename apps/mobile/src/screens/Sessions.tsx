@@ -81,7 +81,9 @@ function TasksBtn() {
   const { tasks } = useHub();
   const ready = tasks.filter((x) => x.status === "ready").length;
   const running = tasks.filter((x) => x.status === "running" || x.status === "waiting_limit").length;
-  const badge = ready ? `${taskIcon("ready")}${ready}` : running ? `${taskIcon("running")}${running}` : "";
+  const asking = tasks.filter((x) => x.asking).length;
+  // ждёт ответа — важнее всего: без тебя задача стоит
+  const badge = asking ? `✋${asking}` : ready ? `${taskIcon("ready")}${ready}` : running ? `${taskIcon("running")}${running}` : "";
   return <Btn small title={`🗂${badge ? " " + badge : ""}`} onPress={() => go({ page: "tasks" })} />;
 }
 

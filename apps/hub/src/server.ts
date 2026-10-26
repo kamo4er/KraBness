@@ -625,7 +625,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const { engineSessionId: _, ...info } = sessions.get(req.params.id);
     return info;
   });
-  app.patch<{ Params: { id: string }; Body: { title?: string; model?: ModelRef; permissionMode?: PermissionMode; resumeAt?: number; groupId?: string | null; autoCheck?: boolean } }>("/api/sessions/:id", async (req) =>
+  app.patch<{ Params: { id: string }; Body: { title?: string; model?: ModelRef; permissionMode?: PermissionMode; resumeAt?: number; groupId?: string | null; autoCheck?: boolean; effort?: string } }>("/api/sessions/:id", async (req) =>
     sessions.update(req.params.id, req.body ?? {}),
   );
   app.delete<{ Params: { id: string } }>("/api/sessions/:id", async (req) => {

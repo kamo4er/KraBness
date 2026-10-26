@@ -67,8 +67,34 @@ export function fixPrompt(review: string): string {
   ].join("\n");
 }
 
-export function morePrompt(comment: string): string {
-  return [L("Пользователь посмотрел результат и просит доработать:", "The user looked at the result and asks for more work:"), comment].join("\n");
+export function morePrompt(comment: string, review?: string): string {
+  return [L("Пользователь посмотрел результат и просит доработать:", "The user looked at the result and asks for more work:"), comment, ...unseenReview(review)].join("\n");
+}
+
+/** Последнее ревью, которое исполнитель ещё не видел: круги кончились, и хаб не отдал его на правки. */
+function unseenReview(review?: string): string[] {
+  if (!review) return [];
+  return [
+    "",
+    L("Последнее ревью другой моделью — его ты ещё не видел:", "The latest review by another model — you haven't seen it yet:"),
+    L("реальные проблемы — исправь; то, с чем не согласен, — не меняй, но объясни почему.", "fix the real problems; where you disagree, don't change the code but explain why."),
+    "<review>",
+    review,
+    "</review>",
+  ];
+}
+
+/** Продолжить упавшую задачу: работа в копии цела, агент сам видит, что успел. */
+export function resumeTaskPrompt(error: string | undefined, comment: string, review?: string): string {
+  return [
+    L("Работа над задачей оборвалась", "Work on the task was interrupted") + (error ? ` (${error.slice(0, 500)})` : "") + ".",
+    L(
+      "Всё, что ты успел сделать, на месте в этой копии проекта. Посмотри `git status` и `git diff`, доделай задачу и проверь.",
+      "Everything you managed to do is still in this copy of the project. Look at `git status` and `git diff`, finish the task and check it.",
+    ),
+    ...(comment ? [L("Пользователь добавил:", "The user added:"), comment] : []),
+    ...unseenReview(review),
+  ].join("\n");
 }
 
 /** К промпту ревью — как ответить, если замечаний нет (иначе не отличить «всё хорошо» от разбора). */
@@ -121,6 +147,8 @@ export class Orchestrator {
   private timers = new Map<string, NodeJS.Timeout>();
   /** задачи, закончившиеся с последней сводки */
   private done = new Set<string>();
+  /** по задаче сейчас идёт действие (влить/выбросить/ещё круг): второе действие получает 409, иначе вливание и выброс идут параллельно */
+  private acting = new Set<string>();
 
   constructor(private d: OrchestratorDeps) {
     d.sessions.on("event", (e) => this.onEvent(e));
@@ -197,6 +225,7 @@ export class Orchestrator {
     task.workerEngine = worker;
     const wm = req.workerModel ?? modelFor(worker);
     if (wm) task.workerModel = wm;
+    if (req.workerEffort) task.workerEffort = req.workerEffort;
 
     if (req.reviewModel === null) return; // без ревью
     const reviewer: EngineId = req.reviewEngine ?? (usable("opencode") ? "opencode" : worker);
@@ -204,6 +233,7 @@ export class Orchestrator {
     task.reviewEngine = reviewer;
     const rm = req.reviewModel ?? modelFor(reviewer);
     if (rm) task.reviewModel = rm;
+    if (req.reviewEffort) task.reviewEffort = req.reviewEffort;
   }
 
   /** Сколько задач работает одновременно (config.tasks.parallel, 1…5). */
@@ -257,20 +287,33 @@ export class Orchestrator {
         title: task.title,
         taskId: task.id,
         ...(task.workerModel ? { model: task.workerModel } : {}),
+        ...(task.workerEffort ? { effort: task.workerEffort } : {}),
       });
       task = this.get(id);
+      // задачу могли остановить, пока создавалась копия
+      if (task.status !== "queued") {
+        try {
+          this.d.sessions.delete(worker.id);
+        } catch {
+          /* уже удалена */
+        }
+        return;
+      }
       task.workerSessionId = worker.id;
       task.workerModel = worker.model;
       if (worker.worktree) task.worktree = worker.worktree;
       task.status = "running";
-      if (this.d.autoCheck?.commands(worker).length) await this.d.sessions.update(worker.id, { autoCheck: true });
       this.step(task, "work", worker.id, worker.model);
       this.save(task);
       this.busy.add(task.id);
+      if (this.d.autoCheck?.commands(worker).length) await this.d.sessions.update(worker.id, { autoCheck: true });
+      // могли остановить, пока мы ждали: остановка уже порвала сессию и откатила копию
+      if (!this.running(task.id)) return;
       await this.d.sessions.prompt(worker.id, workPrompt(task.goal, !!worker.worktree && hasLinkedDeps(worker.worktree.path)));
       this.d.log?.(`[task] ${L("начал", "started")}: ${task.title}`);
     } catch (e) {
-      this.fail(this.get(id), (e as Error).message);
+      const cur = this.d.db.getTask(id);
+      if (cur) this.fail(cur, (e as Error).message);
     }
   }
 
@@ -292,6 +335,16 @@ export class Orchestrator {
   }
 
   async act(id: string, a: TaskAction): Promise<TaskInfo> {
+    if (this.acting.has(id)) throw new HttpError(409, L("Задача уже обрабатывается", "The task is already being handled"));
+    this.acting.add(id);
+    try {
+      return await this.actNow(id, a);
+    } finally {
+      this.acting.delete(id);
+    }
+  }
+
+  private async actNow(id: string, a: TaskAction): Promise<TaskInfo> {
     const t = this.get(id);
     if (a.action === "merge") {
       if (t.status !== "ready") throw new HttpError(409, L("Задача ещё не готова", "The task isn't ready yet"));
@@ -304,23 +357,59 @@ export class Orchestrator {
       return t;
     }
     if (a.action === "discard") {
-      if (t.workerSessionId && t.worktree) await this.d.sessions.discardWorktree(t.workerSessionId).catch((e: Error) => this.d.log?.(`[task] ${e.message}`));
+      // влитую задачу выбрасывать нельзя: в истории должно остаться, что её влили
+      if (!["running", "waiting_limit", "queued", "ready", "failed"].includes(t.status))
+        throw new HttpError(409, L("Выбросить можно только задачу в работе, в очереди, ожидающую лимита, готовую или упавшую", "Discard is only for a running, queued, waiting, ready, or failed task"));
+      // Сначала закрываем задачу: события от остановленных сессий не должны её двигать
+      // (idle от abort приходит асинхронно, пока мы ещё катим откат).
+      const timer = this.timers.get(t.id);
+      if (timer) clearTimeout(timer);
+      this.timers.delete(t.id);
+      this.busy.delete(t.id);
+      const step = t.steps.at(-1);
+      if (step && step.status === "running") {
+        step.status = "skipped";
+        step.finishedAt = Date.now();
+        step.note = L("остановлено", "stopped");
+      }
       t.status = "discarded";
       this.save(t);
+
+      for (const sid of this.sessionIds(t)) {
+        const s = this.session(sid);
+        if (!s) continue;
+        // проверки не должны прислать «почини» остановленному агенту
+        if (sid === t.workerSessionId && s.autoCheck) await this.d.sessions.update(sid, { autoCheck: false }).catch((e: Error) => this.d.log?.(`[task] ${e.message}`));
+        await this.d.sessions.abort(sid).catch((e: Error) => this.d.log?.(`[task] ${e.message}`));
+        if (s.resumeAt) this.d.sessions.setResumeAt(sid, 0);
+      }
+      // откат, когда агент точно перестал писать: у Claude abort — запрос прерывания, процесс умирает не сразу
+      if (t.workerSessionId) {
+        await this.waitStopped(t.workerSessionId);
+        if (t.worktree) await this.d.sessions.discardWorktree(t.workerSessionId).catch((e: Error) => this.d.log?.(`[task] ${e.message}`));
+      }
       await this.pump();
-      return t;
+      return this.get(t.id);
     }
     const comment = String(a.comment ?? "").trim();
-    if (!comment) throw new HttpError(400, L("Напиши, что доработать", "Say what to improve"));
-    if (t.status === "running") throw new HttpError(409, L("Задача ещё работает", "The task is still running"));
+    // ещё круг — у готовой задачи (тогда нужен комментарий) или у упавшей (продолжить с того места, где оборвалась)
+    const failed = t.status === "failed";
+    if (t.status !== "ready" && !failed)
+      throw new HttpError(409, t.status === "running" ? L("Задача ещё работает", "The task is still running") : L("Ещё круг — только у готовой или упавшей задачи", "One more round is only for a ready or failed task"));
+    if (!comment && !failed) throw new HttpError(400, L("Напиши, что доработать", "Say what to improve"));
     if (!t.workerSessionId) throw new HttpError(409, L("У задачи нет сессии исполнителя", "The task has no worker session"));
+    const error = t.error;
+    // замечания последнего ревью исполнителю не уходили (кончились круги) — отдаём сейчас, иначе «доделай по ревью» ему не о чем
+    const review = t.reviewVerdict === "remarks" && t.reviewText ? t.reviewText : undefined;
+    delete t.reviewVerdict;
     // круги ревью считаем заново: это новая порция работы
     t.reviews = 0;
     t.status = "running";
-    this.step(t, "fix", t.workerSessionId, t.workerModel);
+    delete t.error;
+    this.step(t, failed ? "work" : "fix", t.workerSessionId, t.workerModel);
     this.save(t);
     this.busy.add(t.id);
-    await this.d.sessions.prompt(t.workerSessionId, morePrompt(comment));
+    await this.d.sessions.prompt(t.workerSessionId, failed ? resumeTaskPrompt(error, comment, review) : morePrompt(comment, review));
     return this.get(id);
   }
 
@@ -375,6 +464,7 @@ export class Orchestrator {
     this.timers.clear();
     this.offSettled?.();
     this.listeners.clear();
+    this.acting.clear();
   }
 
   // ---------- события ----------
@@ -383,6 +473,20 @@ export class Orchestrator {
     const t = this.byWorker(e.sessionId) ?? this.byReview(e.sessionId);
     if (!t || this.closed) return;
     const ev = e.event;
+    // агент ждёт человека — помечаем задачу, иначе она молча «работает»
+    if (ev.type === "permission.asked" || ev.type === "question.asked") {
+      const text = ev.type === "permission.asked" ? `${ev.request.tool}: ${ev.request.title}` : (ev.request.questions[0]?.question ?? "");
+      t.asking = { sessionId: e.sessionId, kind: ev.type === "permission.asked" ? "permission" : "question", text: text.slice(0, 300), at: Date.now() };
+      this.save(t);
+      return;
+    }
+    if (ev.type === "permission.resolved" || ev.type === "question.resolved") {
+      if (t.asking?.sessionId === e.sessionId) {
+        delete t.asking;
+        this.save(t);
+      }
+      return;
+    }
     if (ev.type === "error" && !isLimitError(ev.message)) {
       if (t.status === "running" || t.status === "waiting_limit") this.fail(t, ev.message);
       return;
@@ -438,6 +542,7 @@ export class Orchestrator {
     try {
       if (!t.reviewModel || t.reviews >= MAX_REVIEWS) return await this.ready(t);
       const diff = await this.diff(t);
+      if (!this.running(t.id)) return;
       if (!diff.diff.trim()) return await this.ready(t);
       await this.review(t, diff);
     } catch (e) {
@@ -456,14 +561,25 @@ export class Orchestrator {
         title: L(`Ревью: ${t.title}`, `Review: ${t.title}`).slice(0, 200),
         taskId: t.id,
         ...(t.reviewModel ? { model: t.reviewModel } : {}),
+        ...(t.reviewEffort ? { effort: t.reviewEffort } : {}),
       });
       sid = s.id;
+      if (!this.running(t.id)) {
+        // остановили, пока создавалась сессия ревью — её и копию убирает уже остановка
+        try {
+          this.d.sessions.delete(sid);
+        } catch {
+          /* уже удалена */
+        }
+        return;
+      }
       t.reviewSessionId = sid;
       t.reviewModel = s.model;
     }
     this.step(t, "review", sid, t.reviewModel);
     this.save(t);
     this.busy.add(t.id);
+    if (!this.running(t.id)) return;
     await this.d.sessions.prompt(sid, reviewTaskPrompt(t.goal, d.diff, d.files, d.truncated));
   }
 
@@ -491,6 +607,7 @@ export class Orchestrator {
       this.step(t, "fix", t.workerSessionId, t.workerModel);
       this.save(t);
       this.busy.add(t.id);
+      if (!this.running(t.id)) return;
       await this.d.sessions.prompt(t.workerSessionId, fixPrompt(text));
     } catch (e) {
       this.fail(t, (e as Error).message);
@@ -499,7 +616,9 @@ export class Orchestrator {
 
   /** Готово: собрать отчёт и позвать пользователя. */
   private async ready(t: TaskInfo): Promise<void> {
+    if (!this.running(t.id)) return;
     const files = await this.files(t);
+    if (!this.running(t.id)) return;
     const summary = t.workerSessionId ? lastAssistantText(this.d.sessions.eventsAfter(t.workerSessionId, 0)) : "";
     t.report = {
       summary,
@@ -535,18 +654,29 @@ export class Orchestrator {
     if (!wt) return { diff: "", files: [], truncated: false };
     // новые файлы иначе не попадут в дифф; .gitignore (node_modules) при этом не трогаем
     await g(wt.path, ["add", "-A"]).catch(() => "");
-    const diff = await g(wt.path, ["diff", "--no-color", wt.base]).catch((e: GitError) => {
+    const from = await this.forkPoint(t);
+    const diff = await g(wt.path, ["diff", "--no-color", from]).catch((e: GitError) => {
       this.d.log?.(`[task] diff: ${e.message}`);
       return "";
     });
     return { diff: diff.slice(0, DIFF_MAX), files: await this.files(t), truncated: diff.length > DIFF_MAX };
   }
 
+/**
+   * Откуда считать работу задачи: коммит, от которого ответвилась копия (merge-base), а не текущая основная ветка.
+   * Основная могла уйти вперёд, пока задача работала, — тогда дифф от неё показал бы чужие коммиты как «удалённые» задачей.
+   */
+  private async forkPoint(t: TaskInfo): Promise<string> {
+    const wt = t.worktree!;
+    const g = this.d.git ?? git;
+    return (await g(wt.path, ["merge-base", wt.base, "HEAD"]).catch(() => "")).trim() || wt.base;
+  }
+
   private async files(t: TaskInfo): Promise<Array<{ status: string; path: string }>> {
     const g = this.d.git ?? git;
     const wt = t.worktree;
     if (!wt) return [];
-    const out = await g(wt.path, ["diff", "--name-status", wt.base]).catch(() => "");
+    const out = await g(wt.path, ["diff", "--name-status", await this.forkPoint(t)]).catch(() => "");
     return out
       .split("\n")
       .filter(Boolean)
@@ -574,6 +704,10 @@ export class Orchestrator {
   }
 
   private fail(t: TaskInfo, message: string): void {
+    const cur = this.d.db.getTask(t.id);
+    // остановленную (или уже влитую) задачу ошибкой не перекрашиваем. Статус — из базы, а данные — текущие:
+    // в t уже могут быть несохранённые итоги шага (текст ревью, круги), их не теряем
+    if (!cur || !["running", "waiting_limit", "queued"].includes(cur.status)) return;
     this.finishStep(t);
     const s = t.steps.at(-1);
     if (s) s.status = "failed";
@@ -598,6 +732,22 @@ export class Orchestrator {
     }
   }
 
+  /** Задача ещё в работе: её могли остановить, пока мы ждали git или движок. Объект не перечитываем — на нём уже есть правки шага. */
+  private running(id: string): boolean {
+    const t = this.d.db.getTask(id);
+    return !!t && t.status === "running";
+  }
+
+  /** Ждём, что движок перестал писать (у Claude abort — запрос прерывания, idle приходит позже). */
+  private async waitStopped(id: string, ms = 10_000): Promise<void> {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      const s = this.session(id);
+      if (!s || (s.status !== "busy" && s.status !== "retry")) return;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+  }
+
   private byWorker(sessionId: string): TaskInfo | undefined {
     return this.list().find((t) => t.workerSessionId === sessionId);
   }
@@ -607,6 +757,11 @@ export class Orchestrator {
   }
 
   private save(t: TaskInfo): void {
+    // задачу могли остановить, пока мы ждали git или движок — устаревший объект не должен затереть остановку
+    const cur = this.d.db.getTask(t.id);
+    if (cur && cur.status === "discarded" && t.status !== "discarded") return;
+    // задача больше не работает — и ждать от человека нечего
+    if (t.status !== "running" && t.status !== "waiting_limit") delete t.asking;
     t.updatedAt = Date.now();
     this.d.db.saveTask(t);
     this.emit();

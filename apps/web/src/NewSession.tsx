@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ago, baseName, type ClaudeTranscript, type EngineId, type FsEntry, type ModelRef, type NewSessionPrefs, type PermissionMode, t } from "@kamharn/client";
 import { client, fmtSize, fmtTime, go, recall, remember, useEngines, useHub } from "./hub.ts";
+import { EffortSelect } from "./Effort.tsx";
 
 /** режимы подтверждений — функцией: подписи на текущем языке */
 export const MODES = (): Array<{ id: PermissionMode; label: string; hint: string }> => [
@@ -36,6 +37,10 @@ export function NewSession({ group: initialGroup }: { group?: string }) {
 
   const info = engines?.find((e) => e.id === engine);
   const models = info?.models ?? [];
+  // уровень рассуждений — свой у каждой модели, помним последний выбор для модели
+  const efforts = models.find((m) => key(m) === model)?.efforts ?? [];
+  const [effort, setEffort] = useState("");
+  useEffect(() => setEffort((model && recall<string>(`effort.${model}`)) || ""), [model]);
 
   // модель: как у группы → из настроек → последняя для движка → дефолт движка → первая; выключенные пропускаем
   useEffect(() => {
@@ -76,8 +81,10 @@ export function NewSession({ group: initialGroup }: { group?: string }) {
         ...(title.trim() ? { title: title.trim() } : {}),
         ...(branch ? { worktree: true } : {}),
         ...(group ? { groupId: group } : {}),
+        ...(effort && efforts.includes(effort) ? { effort } : {}),
       });
       remember(`model.${engine}`, model);
+      remember(`effort.${model}`, effort);
       remember("dir", dir);
       remember("mode", mode);
       go({ page: "session", id: s.id });
@@ -125,6 +132,7 @@ export function NewSession({ group: initialGroup }: { group?: string }) {
               </optgroup>
             ))}
           </select>
+          <EffortSelect efforts={efforts} value={effort} onChange={setEffort} />
         </section>
 
         <section>
