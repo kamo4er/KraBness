@@ -5,6 +5,13 @@ import { homedir } from "node:os";
 import { L } from "./lang.ts";
 import type { ModelRef, CustomProvider, LangSetting, McpServer, NewSessionPrefs, TelegramProxy, RemoteSettings } from "@kamharn/protocol";
 
+/** Бот одной сессии: токен от @BotFather и подключённые личные чаты. */
+export interface SessionBotConfig {
+  sessionId: string;
+  token: string;
+  chats: Array<{ id: number; name: string }>;
+}
+
 export interface HubConfig {
   /** адреса, на которых слушает хаб; "tailscale" — подставить IPv4 из `tailscale ip -4` */
   listen: string[];
@@ -22,6 +29,8 @@ export interface HubConfig {
   modelFavorites?: Record<string, string[]>;
   /** свой Telegram-бот для уведомлений: токен от @BotFather и привязанный чат */
   telegram?: { token: string; chatId?: number };
+  /** боты сессий в Telegram (sessionbot.ts) */
+  sessionBots?: SessionBotConfig[];
   /** свои MCP-серверы — хаб отдаёт их обоим движкам */
   mcpServers?: McpServer[];
   /** язык интерфейса, уведомлений и ошибок; auto — язык системы (у клиентов — их устройства) */
@@ -123,6 +132,12 @@ export class ConfigStore {
   setTelegram(t: { token: string; chatId?: number } | undefined): void {
     if (t) this.config.telegram = t;
     else delete this.config.telegram;
+    this.save();
+  }
+
+  setSessionBots(list: SessionBotConfig[]): void {
+    if (list.length) this.config.sessionBots = list;
+    else delete this.config.sessionBots;
     this.save();
   }
 

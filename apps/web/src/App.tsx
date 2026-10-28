@@ -5,6 +5,7 @@ import { Project } from "./Project.tsx";
 import { NewSession } from "./NewSession.tsx";
 import { Settings } from "./Settings.tsx";
 import { Task, Tasks, taskIcon } from "./Tasks.tsx";
+import { SessionUsage } from "./Usage.tsx";
 import { Group } from "./Group.tsx";
 import { Providers } from "./Providers.tsx";
 import { Mcp } from "./Mcp.tsx";
@@ -190,6 +191,7 @@ function SessionItem({ s, active }: { s: SessionInfo; active: boolean }) {
         {s.status === "busy" && <span className="spinner" title={t("работает", "running")} />}
         {s.resumeAt ? <span title={t("продолжит сам после лимита", "will resume by itself after the limit")} style={{ whiteSpace: "nowrap", flexShrink: 0 }}>⏳ {new Date(s.resumeAt).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" })}</span> : null}
         <span className="session__dir">{shortPath(s.directory)}</span>
+        <SessionUsage id={s.id} />
       </div>
     </button>
   );

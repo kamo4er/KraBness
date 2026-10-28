@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Image, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 import { t, type SessionGroup, type SessionInfo, locale } from "@kamharn/client";
 import { client, recall, remember, useHub } from "../store.ts";
+import { SessionUsage } from "../Usage.tsx";
 import { APP_VERSION, useUpdate } from "../update.ts";
 import { go } from "../nav.ts";
 import { Btn, connLabel, ConnDot, EngineBadge, Limits, ListSheet } from "../ui.tsx";
@@ -186,6 +187,7 @@ function Row({ s, onLongPress }: { s: SessionInfo; onLongPress: () => void }) {
         <Text style={[S.muted, { flex: 1 }]} numberOfLines={1}>
           {shortDir(s.directory)}
         </Text>
+        <SessionUsage id={s.id} />
       </View>
     </Pressable>
   );

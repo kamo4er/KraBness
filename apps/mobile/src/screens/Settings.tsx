@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Linking, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, ToastAndroid, View } from "react-native";
 import type { HubInfo, TelegramProxy, TelegramStatus } from "@kamharn/client";
 import { client, saveQuickPrompts, unpair, useConn, useHub, useQuickPrompts } from "../store.ts";
+import { UsagePage } from "../Usage.tsx";
 import { back, go } from "../nav.ts";
 import { APP_VERSION, APP_VERSION_CODE } from "../update.ts";
 import { Btn, connLabel, ConnDot } from "../ui.tsx";
@@ -19,7 +20,7 @@ import { dialog } from "../dialog.tsx";
 import { firebaseBuilt, setNotifyMode, useNotifyMode } from "../notify.ts";
 import { HubUpdateBox } from "../HubUpdate.tsx";
 
-export type SettingsSection = "general" | "agents" | "connect" | "notify" | "computer" | "updates";
+export type SettingsSection = "general" | "agents" | "connect" | "notify" | "computer" | "usage" | "updates";
 
 /** разделы настроек — функцией: подписи на текущем языке */
 const SECTIONS = (): { id: SettingsSection; icon: string; title: string; hint: string }[] => [
@@ -28,6 +29,7 @@ const SECTIONS = (): { id: SettingsSection; icon: string; title: string; hint: s
   { id: "connect", icon: "🔗", title: t("Подключение", "Connection"), hint: t("Связь с хабом, свой сервер, отключение", "Hub connection, your own server, disconnecting") },
   { id: "notify", icon: "🔔", title: t("Уведомления", "Notifications"), hint: t("Способ уведомлений, связь в фоне, Telegram", "How to notify, staying connected, Telegram") },
   { id: "computer", icon: "🖥️", title: t("Компьютер", "Computer"), hint: t("Разбудить, усыпить, экран, перезапуск хаба", "Wake, sleep, screen, restarting the hub") },
+  { id: "usage", icon: "📊", title: t("Расход токенов", "Token usage"), hint: t("День, неделя, месяц или свой период", "Day, week, month or your own period") },
   { id: "updates", icon: "⬆️", title: t("Обновления", "Updates"), hint: t("KraBness и это приложение", "KraBness and this app") },
 ];
 
@@ -145,6 +147,8 @@ export function Settings({ section }: { section?: SettingsSection }) {
             </View>
             <TelegramBox />
           </>
+        ) : sec.id === "usage" ? (
+          <UsagePage />
         ) : sec.id === "computer" ? (
           <>
             <View style={st.box}>

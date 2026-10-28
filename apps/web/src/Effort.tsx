@@ -13,10 +13,10 @@ export function EffortSelect({ efforts, value, onChange, inline }: { efforts: st
       value={v}
       onChange={(e) => onChange(e.target.value)}
     >
-      <option value="">{t("думает: по умолчанию", "effort: default")}</option>
+      <option value="">auto</option>
       {efforts.map((x) => (
         <option key={x} value={x}>
-          {t("думает", "effort")}: {x}
+          {x}
         </option>
       ))}
     </select>

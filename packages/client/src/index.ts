@@ -7,6 +7,10 @@ import {
   upsertPart,
   type AppRelease,
   type ClaudeLimits,
+  type UsageReport,
+  type SessionBotInfo,
+  type FileHit,
+  type UsageTotals,
   type ClaudeTranscript,
   type CreateSessionRequest,
   type FileView,
@@ -49,8 +53,9 @@ import {
 export * from "@kamharn/protocol";
 export { speakableText, SPEECH_MAX } from "./speech.ts";
 export { splitArgs, joinArgs, parsePairs } from "./args.ts";
-export { ago, baseName } from "./format.ts";
+export { ago, baseName, fmtTokens, fmtCost, localDay } from "./format.ts";
 export { parseFileRef, resolveFileRef, type FileRef } from "./paths.ts";
+export { mentionAt, mentionText, applyMention } from "./mention.ts";
 export { engineUsable, engineName, modelKey, parseModelKey, modelOptions, optionReady, defaultTaskModels, type EngineModelOption } from "./taskModels.ts";
 export { t, tn, locale, getLang, getLangSetting, applyLangSetting, onLangChange } from "./i18n.ts";
 import { applyLangSetting, locale } from "./i18n.ts";
@@ -65,6 +70,8 @@ export interface ClientState {
   groups: SessionGroup[];
   /** задачи (конвейер над сессиями) */
   tasks: TaskInfo[];
+  /** расход токенов по сессиям (итоги) */
+  usage: Record<string, UsageTotals>;
   views: Record<string, SessionView>;
   /** лимиты подписки Claude (последние известные) */
   limits?: ClaudeLimits;
@@ -127,7 +134,7 @@ export class HubClient {
   private closed = false;
   private present = false;
   private noticeListeners = new Set<(n: HubNotice) => void>();
-  state: ClientState = { conn: "connecting", sessions: [], groups: [], tasks: [], views: {}, versions: {} };
+  state: ClientState = { conn: "connecting", sessions: [], groups: [], tasks: [], usage: {}, views: {}, versions: {} };
 
   constructor(public baseUrl: string, public token?: string) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
@@ -283,13 +290,16 @@ export class HubClient {
     switch (m.t) {
       case "hello":
         applyLangSetting(m.language);
-        this.set({ conn: "online", deviceId: m.deviceId, sessions: m.sessions, groups: m.groups ?? [], tasks: m.tasks ?? [], ...(m.limits ? { limits: m.limits } : {}), ...(m.update ? { update: m.update } : {}) });
+        this.set({ conn: "online", deviceId: m.deviceId, sessions: m.sessions, groups: m.groups ?? [], tasks: m.tasks ?? [], usage: m.usage ?? {}, ...(m.limits ? { limits: m.limits } : {}), ...(m.update ? { update: m.update } : {}) });
         break;
       case "groups":
         this.set({ groups: m.groups });
         break;
       case "tasks":
         this.set({ tasks: m.tasks });
+        break;
+      case "usage":
+        this.set({ usage: { ...this.state.usage, [m.sessionId]: m.usage } });
         break;
       case "language":
         applyLangSetting(m.language);
@@ -388,6 +398,8 @@ export class HubClient {
   roots = () => this.api<string[]>("GET", "/api/roots");
   /** Меню «/»: скиллы и команды Claude для сессии. */
   commands = (id: string) => this.api<SlashCommand[]>("GET", `/api/sessions/${id}/commands`);
+  /** «@»: файлы и папки проекта сессии под запрос */
+  searchFiles = (id: string, q: string) => this.api<FileHit[]>("GET", `/api/sessions/${id}/files?q=${encodeURIComponent(q)}`);
   /** MCP-серверы из настроек Claude: подключать ли их в сессиях KamHarn. */
   claudeMcp = () => this.api<{ enabled: boolean; servers: string[] }>("GET", "/api/claude/mcp");
   setClaudeMcp = (enabled: boolean) => this.api<{ enabled: boolean; servers: string[] }>("PUT", "/api/claude/mcp", { enabled });
@@ -495,11 +507,20 @@ export class HubClient {
   /** список моделей у OpenAI-совместимого сервера (запрос идёт с ПК) */
   probeServer = (baseURL: string, apiKey?: string) => this.api<{ models: string[] }>("POST", "/api/providers/probe", { baseURL, apiKey });
 
-  createGroup = (g: { name: string; icon?: string; prompt?: string }) => this.api<SessionGroup>("POST", "/api/groups", g);
-  updateGroup = (id: string, g: { name?: string; icon?: string; prompt?: string; sort?: number }) => this.api<SessionGroup>("PATCH", `/api/groups/${id}`, g);
+  createGroup = (g: { name: string; icon?: string; prompt?: string; noUserRules?: boolean }) => this.api<SessionGroup>("POST", "/api/groups", g);
+  updateGroup = (id: string, g: { name?: string; icon?: string; prompt?: string; noUserRules?: boolean; sort?: number }) => this.api<SessionGroup>("PATCH", `/api/groups/${id}`, g);
   deleteGroup = (id: string) => this.api("DELETE", `/api/groups/${id}`);
 
   tasks = () => this.api<TaskInfo[]>("GET", "/api/tasks");
+  /** бот сессии в Telegram */
+  sessionBot = (id: string) => this.api<SessionBotInfo>("GET", `/api/sessions/${id}/telegram`);
+  setSessionBot = (id: string, token: string) => this.api<SessionBotInfo>("PUT", `/api/sessions/${id}/telegram`, { token });
+  sessionBotCode = (id: string) => this.api<SessionBotInfo>("POST", `/api/sessions/${id}/telegram/code`);
+  renameSessionBotChat = (id: string, chat: number, name: string) => this.api<SessionBotInfo>("PATCH", `/api/sessions/${id}/telegram/chats/${chat}`, { name });
+  unlinkSessionBotChat = (id: string, chat: number) => this.api<SessionBotInfo>("DELETE", `/api/sessions/${id}/telegram/chats/${chat}`);
+  removeSessionBot = (id: string) => this.api<SessionBotInfo>("DELETE", `/api/sessions/${id}/telegram`);
+  /** расход токенов за период (локальные даты YYYY-MM-DD, включительно) */
+  usageReport = (from: string, to: string) => this.api<UsageReport>("GET", `/api/usage?from=${from}&to=${to}`);
   createTask = (req: CreateTaskRequest) => this.api<TaskInfo>("POST", "/api/tasks", req);
   task = (id: string) => this.api<TaskInfo>("GET", `/api/tasks/${id}`);
   taskAction = (id: string, a: TaskAction) => this.api<TaskInfo>("POST", `/api/tasks/${id}/action`, a);

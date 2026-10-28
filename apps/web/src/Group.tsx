@@ -12,11 +12,12 @@ export function Group({ id }: { id: string }) {
   const [name, setName] = useState("");
   const [icon, setIcon] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [noUserRules, setNoUserRules] = useState(false);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   // форма заполняется, когда группа пришла с хаба
   useEffect(() => {
-    if (g) (setName(g.name), setIcon(g.icon ?? ""), setPrompt(g.prompt ?? ""));
+    if (g) (setName(g.name), setIcon(g.icon ?? ""), setPrompt(g.prompt ?? ""), setNoUserRules(!!g.noUserRules));
   }, [g?.id]);
 
   if (!isNew && !g) return <div className="empty">{state.conn === "online" ? t("Группа не найдена.", "Group not found.") : t("Загрузка…", "Loading…")}</div>;
@@ -26,8 +27,8 @@ export function Group({ id }: { id: string }) {
     setBusy(true);
     setError(undefined);
     try {
-      if (isNew) await client.createGroup({ name, icon, prompt });
-      else await client.updateGroup(id, { name, icon, prompt });
+      if (isNew) await client.createGroup({ name, icon, prompt, noUserRules });
+      else await client.updateGroup(id, { name, icon, prompt, noUserRules });
       go({ page: "home" });
     } catch (e) {
       setError((e as Error).message);
@@ -73,6 +74,18 @@ export function Group({ id }: { id: string }) {
             placeholder={t("Добавляется к инструкциям агента во всех сессиях группы. Например: «Ты психолог-программист, помогаешь мне справиться с внутренней сингулярностью».", "Appended to the agent's instructions in every session of the group. E.g. “You are a senior game developer, keep answers short”.")}
           />
           <p className="muted">{t("Применяется ко всем сессиям группы со следующего сообщения — и к уже идущим, и к перенесённым в группу.", "Applies to all sessions of the group from the next message — running ones and ones moved into the group.")}</p>
+        </section>
+        <section>
+          <label className="row">
+            <input type="checkbox" checked={noUserRules} onChange={(e) => setNoUserRules(e.target.checked)} />
+            <b>{t("Без моих глобальных правил", "Without my global rules")}</b>
+          </label>
+          <p className="muted">
+            {t(
+              "Claude не читает ~/.claude/CLAUDE.md и ~/.claude/rules: твои правила про код, обращение и стиль. Для чатов не про код (врач, дом). Нужное из них допиши в промпт выше.",
+              "Claude skips ~/.claude/CLAUDE.md and ~/.claude/rules: your rules about coding, how to address you, style. For chats that aren't about code. Put what you need from them into the prompt above.",
+            )}
+          </p>
         </section>
         {error && <p className="error">{error}</p>}
         <button className="btn btn--primary btn--big" disabled={!name.trim() || busy} onClick={() => void save()}>

@@ -1,7 +1,7 @@
 // Чат сессии: стрим сообщений, инструменты, подтверждения, смена модели и режима, отправка и остановка.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View } from "react-native";
-import { limitView, resolveFileRef, type FileRef, type ClaudeLimits, type ListeningPort, type MessageView, type PermissionMode, type SessionInfo, type SlashCommand, t, locale } from "@kamharn/client";
+import { ActivityIndicator, FlatList, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View, type TextInputInstance } from "react-native";
+import { limitView, resolveFileRef, type FileRef, type ClaudeLimits, type ListeningPort, type MessageView, type PermissionMode, type SessionInfo, type SlashCommand, type FileHit, t, locale } from "@kamharn/client";
 import { client, fmtSize, useEngines, useHub, useQuickPrompts } from "../store.ts";
 import { loadChat } from "../cache.ts";
 import { getDraft, getDraftFiles, setDraft, setDraftFiles } from "../drafts.ts";
@@ -16,6 +16,8 @@ import { C, S, mono } from "../theme.ts";
 import { dialog } from "../dialog.tsx";
 import { pickOpencodeModel } from "../modelPick.tsx";
 import { EffortPicker } from "../effort.tsx";
+import { SessionUsage } from "../Usage.tsx";
+import { MentionList, useMention } from "../mention.tsx";
 
 /** Автопроверка с телефона: включить с командами проекта (сохранёнными или предложенными), прогнать сейчас. Править команды удобнее в вебе. */
 async function checksMenu(id: string, on: boolean): Promise<void> {
@@ -123,12 +125,15 @@ export function Chat({ id }: { id: string }) {
       ) : (
         <Header info={info} conn={state.conn} onSearch={() => setSearch("")} />
       )}
-      {info.engine === "claude" ? (
+      {info.engine === "claude" || state.usage[info.id] ? (
         <View style={st.limitRow}>
-          <Limits limits={state.limits} style={{ flex: 1 }} />
-          <Pressable hitSlop={8} onPress={() => handoff(info.id)}>
-            <Text style={{ color: C.accent, fontSize: 12 }}>→ opencode</Text>
-          </Pressable>
+          {info.engine === "claude" ? <Limits limits={state.limits} style={{ flex: 1 }} /> : <View style={{ flex: 1 }} />}
+          <SessionUsage id={info.id} full />
+          {info.engine === "claude" ? (
+            <Pressable hitSlop={8} onPress={() => handoff(info.id)}>
+              <Text style={{ color: C.accent, fontSize: 12 }}>→ opencode</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
       {info.engine === "claude" ? <LimitBanner limits={state.limits} sessionId={id} /> : null}
@@ -219,6 +224,7 @@ function Header({ info, conn, onSearch }: { info: SessionInfo; conn: ReturnType<
             dialog(info.title, undefined, [
               { text: t("Превью dev-сервера", "Dev server preview"), icon: "▶️", hint: t("открыть сайт или игру проекта в браузере", "open the project's site or game in the browser"), onPress: () => setPreview(true) },
               { text: t("Проект", "Project"), icon: "📁", hint: t("изменения, файлы, терминал", "changes, files, terminal"), onPress: () => go({ page: "project", id: info.id }) },
+              { text: t("Бот в Telegram", "Telegram bot"), icon: "✈️", hint: t("писать этой сессии из Telegram, файлы туда-обратно", "talk to this session from Telegram, files both ways"), onPress: () => go({ page: "sessionBot", id: info.id }) },
               {
                 text: info.autoCheck ? t("Автопроверка: вкл", "Auto-check: on") : t("Автопроверка: выкл", "Auto-check: off"),
                 icon: "✅",
@@ -267,7 +273,7 @@ function Header({ info, conn, onSearch }: { info: SessionInfo; conn: ReturnType<
           }}
         />
         <EffortPicker
-          style={{ flex: 1 }}
+          style={{ flex: 0.6 }}
           efforts={models.find((m) => key(m) === key(info.model))?.efforts ?? []}
           value={info.effort ?? ""}
           onChange={(v) => client?.updateSession(info.id, { effort: v }).catch(fail)}
@@ -391,6 +397,16 @@ function Composer({ sessionId, busy, slash }: { sessionId: string; busy: boolean
     slashQuery === undefined ? [] : commands.filter((c) => c.name.toLowerCase().includes(slashQuery.toLowerCase())).slice(0, 12);
   const uploading = files.some((f) => !f.fileId && !f.error);
   const ready = files.flatMap((f) => (f.fileId ? [f.fileId] : []));
+  // «@»: упоминание ищется перед курсором
+  const input = useRef<TextInputInstance>(null);
+  const [caret, setCaret] = useState(0);
+  const mention = useMention(sessionId, text, caret);
+  const pickMention = (h: FileHit) => {
+    const r = mention.apply(h);
+    setText(r.text);
+    setCaret(r.caret);
+    setTimeout(() => input.current?.setSelection(r.caret, r.caret), 0);
+  };
 
   async function add(pick: () => Promise<Picked[]>) {
     let picked: Picked[];
@@ -453,6 +469,7 @@ function Composer({ sessionId, busy, slash }: { sessionId: string; busy: boolean
           ))}
         </View>
       ) : null}
+      <MentionList m={mention} pick={pickMention} />
       {slashMatches.length ? (
         <ScrollView style={st.slash} keyboardShouldPersistTaps="always">
           {slashMatches.map((c) => (
@@ -487,8 +504,10 @@ function Composer({ sessionId, busy, slash }: { sessionId: string; busy: boolean
         {slash && commands.length && !text ? <Btn title="/" style={st.iconBtn} onPress={() => setText("/")} /> : null}
         <Btn title="📎" style={st.iconBtn} onPress={attach} />
         <TextInput
+          ref={input}
           style={[S.input, st.input]}
           multiline
+          onSelectionChange={(e) => setCaret(e.nativeEvent.selection.end)}
           placeholder={busy ? t("В очередь…", "Queue a message…") : t("Сообщение…", "Message…")}
           placeholderTextColor={C.muted}
           value={text}

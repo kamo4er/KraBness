@@ -8,6 +8,7 @@ import { ConfigStore, REPO_ROOT, type HubConfig } from "./config.ts";
 import { Db } from "./db.ts";
 import { Auth } from "./auth.ts";
 import { SessionManager } from "./sessions.ts";
+import { backfillUsage } from "./usage.ts";
 import { randomBytes } from "node:crypto";
 import { OpencodeEngine } from "./engines/opencode.ts";
 import { ClaudeEngine } from "./engines/claude.ts";
@@ -19,6 +20,7 @@ import { Previews } from "./preview.ts";
 import { Terminal } from "./terminal.ts";
 import { Providers } from "./providers.ts";
 import { TelegramBot } from "./telegram.ts";
+import { SessionBots } from "./sessionbot.ts";
 import { Presence } from "./presence.ts";
 import { registerMcp } from "./mcp.ts";
 import { McpRegistry } from "./usermcp.ts";
@@ -92,6 +94,8 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   const cfg = config.config;
   mkdirSync(cfg.dataDir, { recursive: true });
   const db = new Db(join(cfg.dataDir, "kamharn.db"));
+  // с этого момента расход считается вживую; всё раньше — история задним числом (backfillUsage)
+  if (!db.getMeta("usage.since")) db.setMeta("usage.since", String(Date.now()));
   const auth = new Auth(db);
   const files = new FileStore(db, config);
   const sessions = new SessionManager(db, config, files);
@@ -111,6 +115,8 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
     log,
   );
   notifier.subscribe((n) => telegram.notify(n));
+  // боты сессий: свой Telegram-бот на сессию (пишешь — уходит агенту, ответ и файлы — обратно)
+  const sessionBots = new SessionBots(config, sessions, files, log);
   sessions.on("event", (e) => notifier.onEvent(e));
   const autoResume = new AutoResume(sessions, () => sessions.limits, (sid, m) => notifier.notify(sid, m), log);
   sessions.on("event", (e) => autoResume.onEvent(e));
@@ -174,7 +180,7 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   // свой адрес за прокси (NAS) и на VPS — тоже известные адреса хаба (QR, приложение выбирает рабочий)
   const allUrls = () => [...urls, ...(config.config.publicUrls ?? []), ...remote.publicUrls()];
   const app = await buildServer({
-    sessions, auth, config, db, files, push, presence, previews, terminal, telegram, version: VERSION,
+    sessions, auth, config, db, files, push, presence, previews, terminal, telegram, sessionBots, version: VERSION,
     autoCheck,
     tasks,
     notices: (cb) => notifier.subscribe(cb),
@@ -280,6 +286,7 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   autoResume.start();
   tasks.start();
   telegram.start();
+  sessionBots.start();
 
   if (cfg.engines.opencode.enabled) {
     const oc = new OpencodeEngine({
@@ -305,6 +312,24 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   }
   if (claude) await sessions.addEngine(claude);
 
+  // расход задним числом — один раз, в фоне: транскрипты Claude и история opencode по сессиям хаба
+  if (!db.getMeta("usage.backfilled")) {
+    void backfillUsage({
+      db,
+      sessions: sessions.list(),
+      engineSessionId: (id) => sessions.engineSessionIdOf(id),
+      claudeProjectsDir: sessions.projectsDir,
+      ...(ocRef ? { opencodeMessages: (esid: string, dir: string) => ocRef!.messages(esid, dir) } : {}),
+      log,
+    }).then(
+      (n) => {
+        db.setMeta("usage.backfilled", String(Date.now()));
+        log(`[usage] ${L("история расхода поднята, записей", "usage history imported, records")}: ${n}`);
+      },
+      (e: Error) => log(`[usage] ${e.message}`),
+    );
+  }
+
   return {
     app,
     sessions,
@@ -326,6 +351,7 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
       autoResume.close();
       terminal.close();
       telegram.close();
+      sessionBots.close();
       await previews.close();
       // Клиенты держат WebSocket постоянно, а server.close() ждёт закрытия всех соединений —
       // без принудительного разрыва хаб висел на выключении вечно (и сторож не мог его перезапустить).

@@ -2,6 +2,10 @@
 import { DatabaseSync } from "node:sqlite";
 import type { TaskInfo, EngineId, ModelRef, PermissionMode, SessionEvent, SessionInfo, SessionStatus, StoredEvent, SessionGroup, WorktreeInfo } from "@kamharn/protocol";
 import { L } from "./lang.ts";
+import type { UsageRow } from "./usage.ts";
+
+/** суммы колонок расхода; unknown_cost — записи без цены */
+const SUMS = "SUM(input) AS input, SUM(output) AS output, SUM(cache_write) AS cache_write, SUM(cache_read) AS cache_read, SUM(cost) AS cost, SUM(cost IS NULL) AS unknown_cost";
 
 export interface SessionRow extends SessionInfo {
   engineSessionId: string;
@@ -86,8 +90,53 @@ export class Db {
     if (!cols.includes("effort")) this.db.exec(`ALTER TABLE sessions ADD COLUMN effort TEXT`);
     if (!cols.includes("task_id")) this.db.exec(`ALTER TABLE sessions ADD COLUMN task_id TEXT`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, icon TEXT, prompt TEXT, sort INTEGER NOT NULL DEFAULT 0)`);
+    const gcols = (this.db.prepare(`PRAGMA table_info(groups)`).all() as Row[]).map((c) => String(c.name));
+    if (!gcols.includes("no_user_rules")) this.db.exec(`ALTER TABLE groups ADD COLUMN no_user_rules INTEGER NOT NULL DEFAULT 0`);
     // задача целиком лежит в JSON: её поля меняются чаще, чем стоит плодить колонки
     this.db.exec(`CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, json TEXT NOT NULL)`);
+    // расход токенов: запись на сообщение/ход; сессию удалили — расход остаётся (история месяца)
+    this.db.exec(`CREATE TABLE IF NOT EXISTS usage (key TEXT PRIMARY KEY, session_id TEXT NOT NULL, ts INTEGER NOT NULL, day TEXT NOT NULL, engine TEXT NOT NULL, model TEXT NOT NULL,
+      input INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0, cache_write INTEGER NOT NULL DEFAULT 0, cache_read INTEGER NOT NULL DEFAULT 0, cost REAL)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS usage_day ON usage(day)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS usage_session ON usage(session_id)`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+  }
+
+  getMeta(key: string): string | undefined {
+    const r = this.db.prepare(`SELECT value FROM meta WHERE key = ?`).get(key) as Row | undefined;
+    return r ? String(r.value) : undefined;
+  }
+
+  setMeta(key: string, value: string): void {
+    this.db.prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value);
+  }
+
+  putUsage(r: UsageRow): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO usage (key, session_id, ts, day, engine, model, input, output, cache_write, cache_read, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(r.key, r.sessionId, r.ts, r.day, r.engine, r.model, r.input, r.output, r.cacheWrite, r.cacheRead, r.cost ?? (null as unknown as number));
+  }
+
+  /** Суммы по сессиям (для списка и шапки чата). */
+  usageBySession(id?: string): Row[] {
+    const where = id ? `WHERE session_id = ?` : "";
+    return this.db.prepare(`SELECT session_id, ${SUMS} FROM usage ${where} GROUP BY session_id`).all(...(id ? [id] : [])) as Row[];
+  }
+
+  usageQuery(from: string, to: string): { firstDay?: string; total: Row; days: Row[]; models: Row[]; sessions: Row[] } {
+    const first = this.db.prepare(`SELECT MIN(day) AS d FROM usage`).get() as Row | undefined;
+    const range = `WHERE day BETWEEN ? AND ?`;
+    return {
+      ...(first?.d ? { firstDay: String(first.d) } : {}),
+      total: this.db.prepare(`SELECT ${SUMS} FROM usage ${range}`).get(from, to) as Row,
+      days: this.db.prepare(`SELECT day, ${SUMS} FROM usage ${range} GROUP BY day ORDER BY day`).all(from, to) as Row[],
+      models: this.db.prepare(`SELECT engine, model, ${SUMS} FROM usage ${range} GROUP BY engine, model ORDER BY (SUM(input) + SUM(output) + SUM(cache_write)) DESC`).all(from, to) as Row[],
+      sessions: this.db
+        .prepare(`SELECT session_id, MAX(engine) AS engine, ${SUMS} FROM usage ${range} GROUP BY session_id ORDER BY (SUM(input) + SUM(output) + SUM(cache_write)) DESC LIMIT 50`)
+        .all(from, to) as Row[],
+    };
   }
 
   close(): void {
@@ -159,6 +208,7 @@ export class Db {
       name: String(r.name),
       ...(r.icon ? { icon: String(r.icon) } : {}),
       ...(r.prompt ? { prompt: String(r.prompt) } : {}),
+      ...(r.no_user_rules ? { noUserRules: true } : {}),
       sort: Number(r.sort),
     }));
   }
@@ -169,8 +219,10 @@ export class Db {
 
   saveGroup(g: SessionGroup): void {
     this.db
-      .prepare(`INSERT INTO groups (id, name, icon, prompt, sort) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, icon = excluded.icon, prompt = excluded.prompt, sort = excluded.sort`)
-      .run(g.id, g.name, g.icon ?? null, g.prompt ?? null, g.sort);
+      .prepare(
+        `INSERT INTO groups (id, name, icon, prompt, sort, no_user_rules) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, icon = excluded.icon, prompt = excluded.prompt, sort = excluded.sort, no_user_rules = excluded.no_user_rules`,
+      )
+      .run(g.id, g.name, g.icon ?? null, g.prompt ?? null, g.sort, g.noUserRules ? 1 : 0);
   }
 
   /** сессии группы остаются, но без группы */

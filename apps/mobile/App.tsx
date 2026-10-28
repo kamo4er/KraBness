@@ -15,6 +15,7 @@ import { FileViewer } from "./src/screens/FileViewer.tsx";
 import { NewSession } from "./src/screens/NewSession.tsx";
 import { Settings } from "./src/screens/Settings.tsx";
 import { Task, Tasks } from "./src/screens/Tasks.tsx";
+import { SessionBot } from "./src/screens/SessionBot.tsx";
 import { Group } from "./src/screens/Group.tsx";
 import { Providers } from "./src/screens/Providers.tsx";
 import { Mcp } from "./src/screens/Mcp.tsx";
@@ -75,6 +76,7 @@ function Root() {
   else if (route.page === "file") screen = <FileViewer key={route.fileId} {...route} />;
   else if (route.page === "new") screen = <NewSession key={route.group ?? ""} group={route.group} />;
   else if (route.page === "group") screen = <Group key={route.id} id={route.id} />;
+  else if (route.page === "sessionBot") screen = <SessionBot key={route.id} id={route.id} />;
   else if (route.page === "tasks") screen = <Tasks />;
   else if (route.page === "task") screen = <Task key={route.id} id={route.id} />;
   else if (route.page === "settings") screen = <Settings key={route.section ?? ""} section={route.section} />;

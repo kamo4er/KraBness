@@ -23,6 +23,7 @@ import type {
   SessionGroup,
   WorktreeInfo,
   WorktreeStatus,
+  UsageTotals,
 } from "@kamharn/protocol";
 import { publicSession, type Db, type SessionRow } from "./db.ts";
 import type { Engine, PromptFile } from "./engines/types.ts";
@@ -33,10 +34,14 @@ import { claudeCommands } from "./commands.ts";
 import { handoffPrompt, reviewPrompt, sessionDigest } from "./handoff.ts";
 import { gitInfo } from "./project.ts";
 import { createWorktree, discardWorktree, GitError, mergeWorktree, removeWorktree, worktreeStatus } from "./worktree.ts";
+import { dayOf, emptyTotals, totalsOf, type UsageRecord } from "./usage.ts";
 import { L } from "./lang.ts";
+
+type GroupPatch = { name?: string; icon?: string; prompt?: string; noUserRules?: boolean };
 
 export interface HubEvents {
   limits: [ClaudeLimits];
+  usage: [string];
   session: [SessionInfo];
   "session.deleted": [string];
   event: [StoredEvent];
@@ -89,6 +94,7 @@ export class SessionManager extends EventEmitter<HubEvents> {
         event: (esid, ev) => this.onEngineEvent(engine.id, esid, ev),
         delta: (esid, d) => this.onEngineDelta(engine.id, esid, d),
         limits: (l) => this.setLimits(l),
+        usage: (esid, u) => this.onEngineUsage(engine.id, esid, u),
       });
     } catch (e) {
       // в «Движках» и «Новой сессии» он виден с причиной (например, «не установлен: как поставить»), а не пропадает
@@ -201,9 +207,13 @@ export class SessionManager extends EventEmitter<HubEvents> {
       return { fileId: f.id, path: f.path, name: f.name, mime: f.mime, size: f.size };
     });
     if (!text.trim() && !files.length) throw new HttpError(400, L("Пустое сообщение", "Empty message"));
-    // промпт группы — ко всем её сессиям, со следующего сообщения
-    const system = s.groupId ? this.db.getGroup(s.groupId)?.prompt : undefined;
-    await this.engine(s.engine).prompt(s.engineSessionId, { text, files, model: s.model, ...(system ? { system } : {}), ...(s.effort ? { effort: s.effort } : {}) });
+    await this.engine(s.engine).prompt(s.engineSessionId, { text, files, model: s.model, ...this.launchOpts(s) });
+  }
+
+  /** Что задаётся движку при запуске процесса: промпт и правила группы, уровень рассуждений. Всё — со следующего сообщения. */
+  private launchOpts(s: SessionInfo): { system?: string; effort?: string; noUserRules?: boolean } {
+    const g = s.groupId ? this.db.getGroup(s.groupId) : undefined;
+    return { ...(g?.prompt ? { system: g.prompt } : {}), ...(g?.noUserRules ? { noUserRules: true } : {}), ...(s.effort ? { effort: s.effort } : {}) };
   }
 
   /** Сжать контекст агента: история заменяется пересказом, в ленте появляется отметка «контекст сжат». */
@@ -212,9 +222,8 @@ export class SessionManager extends EventEmitter<HubEvents> {
     const engine = this.engine(s.engine);
     if (!engine.compact) throw new HttpError(400, L("Этот движок не умеет сжимать контекст", "This engine can't compact the context"));
     if (s.status === "busy" || s.status === "retry") throw new HttpError(409, L("Агент ещё работает — дождись или останови его", "The agent is still working — wait or stop it"));
-    const system = s.groupId ? this.db.getGroup(s.groupId)?.prompt : undefined;
-    // уровень тоже: иначе claude решил бы, что он сменился, и перезапустился без него
-    await engine.compact(s.engineSessionId, { model: s.model, ...(system ? { system } : {}), ...(s.effort ? { effort: s.effort } : {}) });
+    // всё, с чем запущен процесс: иначе claude решил бы, что оно сменилось, и перезапустился без него
+    await engine.compact(s.engineSessionId, { model: s.model, ...this.launchOpts(s) });
   }
 
   /** Переименование, смена модели (со следующего сообщения) и режима подтверждений (сразу). */
@@ -255,6 +264,35 @@ export class SessionManager extends EventEmitter<HubEvents> {
       this.append(sessionId, { type: "message.upserted", message: { id: messageId, role: "assistant", createdAt } });
     }
     this.append(sessionId, { type: "part.upserted", messageId, part });
+  }
+
+/** Расход токенов от движка: запись в базу и сигнал клиентам (итог сессии). */
+  private onEngineUsage(engine: EngineId, esid: string, u: UsageRecord): void {
+    const id = this.byEngineSession.get(key(engine, esid));
+    if (!id) return;
+    const ts = u.ts ?? Date.now();
+    this.db.putUsage({ ...u, sessionId: id, engine, ts, day: dayOf(ts) });
+    this.emit("usage", id);
+  }
+
+  /** Итоги расхода: по одной сессии или по всем. */
+  usageTotals(): Record<string, UsageTotals> {
+    return Object.fromEntries(this.db.usageBySession().map((r) => [String(r.session_id), totalsOf(r)]));
+  }
+
+  sessionUsage(id: string): UsageTotals {
+    const r = this.db.usageBySession(id)[0];
+    return r ? totalsOf(r) : emptyTotals();
+  }
+
+  /** где лежат транскрипты Claude Code */
+  get projectsDir(): string {
+    return this.claudeProjectsDir;
+  }
+
+  /** id сессии в движке (для расхода задним числом). */
+  engineSessionIdOf(id: string): string | undefined {
+    return this.db.getSession(id)?.engineSessionId;
   }
 
   /** Автопродолжение после лимита: когда сессия сама продолжит (0 — не ждёт). */
@@ -503,8 +541,8 @@ export class SessionManager extends EventEmitter<HubEvents> {
     return this.db.listGroups();
   }
 
-  private cleanGroup(patch: { name?: string; icon?: string; prompt?: string }): { name?: string; icon?: string; prompt?: string } {
-    const out: { name?: string; icon?: string; prompt?: string } = {};
+  private cleanGroup(patch: GroupPatch): GroupPatch {
+    const out: GroupPatch = {};
     if (patch.name !== undefined) {
       const name = String(patch.name).trim().slice(0, 60);
       if (!name) throw new HttpError(400, L("Пустое название группы", "Empty group name"));
@@ -513,26 +551,28 @@ export class SessionManager extends EventEmitter<HubEvents> {
     if (patch.icon !== undefined) out.icon = [...String(patch.icon).trim()].slice(0, 4).join("");
     // промпт уходит в командную строку claude — ограничиваем разумно
     if (patch.prompt !== undefined) out.prompt = String(patch.prompt).trim().slice(0, 8000);
+    if (patch.noUserRules !== undefined) out.noUserRules = patch.noUserRules === true;
     return out;
   }
 
-  createGroup(patch: { name: string; icon?: string; prompt?: string }): SessionGroup {
+  createGroup(patch: GroupPatch & { name: string }): SessionGroup {
     const c = this.cleanGroup(patch);
     if (!c.name) throw new HttpError(400, L("Пустое название группы", "Empty group name"));
     const sort = Math.max(0, ...this.db.listGroups().map((g) => g.sort)) + 1;
-    const g: SessionGroup = { id: "g_" + randomUUID().replace(/-/g, "").slice(0, 12), name: c.name, sort, ...(c.icon ? { icon: c.icon } : {}), ...(c.prompt ? { prompt: c.prompt } : {}) };
+    const g: SessionGroup = { id: "g_" + randomUUID().replace(/-/g, "").slice(0, 12), name: c.name, sort, ...(c.icon ? { icon: c.icon } : {}), ...(c.prompt ? { prompt: c.prompt } : {}), ...(c.noUserRules ? { noUserRules: true } : {}) };
     this.db.saveGroup(g);
     this.emit("groups", this.groups());
     return g;
   }
 
-  updateGroup(id: string, patch: { name?: string; icon?: string; prompt?: string; sort?: number }): SessionGroup {
+  updateGroup(id: string, patch: GroupPatch & { sort?: number }): SessionGroup {
     const g = this.db.getGroup(id);
     if (!g) throw new HttpError(404, L("Нет такой группы", "No such group"));
     const c = this.cleanGroup(patch);
     const next: SessionGroup = { ...g, ...(c.name ? { name: c.name } : {}), sort: Number.isFinite(patch.sort) ? Number(patch.sort) : g.sort };
     if (c.icon !== undefined) next.icon = c.icon || undefined;
     if (c.prompt !== undefined) next.prompt = c.prompt || undefined;
+    if (c.noUserRules !== undefined) next.noUserRules = c.noUserRules || undefined;
     this.db.saveGroup(next);
     this.emit("groups", this.groups());
     return next;

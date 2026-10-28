@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { limitView, resolveFileRef, speakableText, type FileRef, type ChecksConfig, type ClaudeLimits, type EngineInfo, type ListeningPort, type WorktreeStatus, type MessageView, type ModelRef, type PermissionMode, type SlashCommand, t, locale } from "@kamharn/client";
+import { limitView, resolveFileRef, speakableText, type FileHit, type FileRef, type ChecksConfig, type ClaudeLimits, type EngineInfo, type ListeningPort, type WorktreeStatus, type MessageView, type ModelRef, type PermissionMode, type SlashCommand, t, locale } from "@kamharn/client";
+import { MentionList, useMention } from "./Mention.tsx";
 import { client, fmtSize, go, useEngines, useHub, useQuickPrompts } from "./hub.ts";
 import { EffortSelect } from "./Effort.tsx";
+import { SessionUsage } from "./Usage.tsx";
+import { SessionBotButton } from "./SessionBot.tsx";
 import { pickOpencodeModel } from "./ModelPick.tsx";
 import { MODES } from "./NewSession.tsx";
 import { FileChip, FileRefCtx, Limits, PartView, PermissionCard, QuestionCard } from "./Parts.tsx";
@@ -261,6 +264,7 @@ function ChatHeader({ info, engines, limits }: { info: NonNullable<ReturnType<ty
               → opencode
             </button>
           )}
+          <SessionUsage id={info.id} full />
           <span className="chat__dir" title={info.directory}>
             {info.directory}
           </span>
@@ -269,6 +273,7 @@ function ChatHeader({ info, engines, limits }: { info: NonNullable<ReturnType<ty
       {info.worktree && <WorktreeButton sessionId={info.id} branch={info.worktree.branch} base={info.worktree.base} busy={info.status === "busy"} />}
       <PreviewButton sessionId={info.id} />
       <ChecksButton sessionId={info.id} on={!!info.autoCheck} />
+      <SessionBotButton sessionId={info.id} />
       <button
         className="btn btn--icon"
         title={t("Сжать контекст: агент перескажет разговор сам себе и освободит место", "Compact the context: the agent summarizes the conversation for itself and frees up space")}
@@ -418,6 +423,16 @@ function Composer({
   const [sending, setSending] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const area = useRef<HTMLTextAreaElement>(null);
+  // курсор нужен «@»: упоминание ищется перед ним
+  const [caret, setCaret] = useState(0);
+  const mention = useMention(sessionId, text, caret);
+  const pickMention = (h: FileHit) => {
+    const r = mention.apply(h);
+    setText(r.text);
+    setCaret(r.caret);
+    requestAnimationFrame(() => (area.current?.focus(), area.current?.setSelectionRange(r.caret, r.caret)));
+  };
+  const syncCaret = () => setCaret(area.current?.selectionStart ?? 0);
 
   useEffect(() => {
     sessionStorage.setItem(`draft.${sessionId}`, text);
@@ -477,6 +492,7 @@ function Composer({
         </div>
       )}
       {error && <p className="error">{error}</p>}
+      <MentionList m={mention} pick={pickMention} />
       {slashMatches.length > 0 && (
         <ul className="slash">
           {slashMatches.map((c) => (
@@ -531,7 +547,8 @@ function Composer({
           placeholder={busy ? t("В очередь…", "Queue a message…") : t("Сообщение…", "Message…")}
           title={t("Enter — отправить, Shift+Enter — перенос строки", "Enter — send, Shift+Enter — new line")}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => (setText(e.target.value), setCaret(e.target.selectionStart))}
+          onSelect={syncCaret}
           onPaste={(e) => {
             const pasted = Array.from(e.clipboardData.files);
             if (pasted.length) {
@@ -540,6 +557,7 @@ function Composer({
             }
           }}
           onKeyDown={(e) => {
+            if (mention.key(e, pickMention)) return;
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia("(pointer: fine)").matches) {
               e.preventDefault();
               void send();

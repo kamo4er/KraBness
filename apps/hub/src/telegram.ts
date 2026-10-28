@@ -4,7 +4,7 @@
 // Кнопки «Разрешить/Отклонить» отвечают на запрос подтверждения; ответ реплаем на уведомление уходит агенту.
 // Где Telegram заблокирован — запросы через свой прокси (SOCKS5 или HTTP, обычно на VPS).
 import { randomInt } from "node:crypto";
-import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from "undici";
+import { fetch as undiciFetch, FormData as UndiciFormData, ProxyAgent, type Dispatcher } from "undici";
 import { socksDispatcher } from "fetch-socks";
 import type { HubNotice, PermissionReply, TelegramProxy, TelegramStatus } from "@kamharn/protocol";
 import type { ConfigStore } from "./config.ts";
@@ -32,9 +32,19 @@ export function telegramHttp(p?: TelegramProxy): TelegramHttp {
       ? socksDispatcher({ type: 5, host: p.host, port: p.port, ...(auth ? { userId: auth.user, password: auth.pass } : {}) })
       : new ProxyAgent({ uri: `http://${host}:${p.port}`, ...(auth ? { token: `Basic ${Buffer.from(`${auth.user}:${auth.pass}`).toString("base64")}` } : {}) });
   return {
-    fetch: ((url: string, init?: RequestInit) => undiciFetch(url, { ...(init as object), dispatcher })) as unknown as typeof fetch,
+    fetch: ((url: string, init?: RequestInit) => undiciFetch(url, { ...(init as object), ...(init?.body instanceof FormData ? { body: toUndiciForm(init.body) } : {}), dispatcher })) as unknown as typeof fetch,
     close: () => void dispatcher.close().catch(() => {}),
   };
+}
+
+/** FormData Node'а fetch из пакета undici не узнаёт и шлёт строкой «[object FormData]» (файл не доходит) — перекладываем в его FormData */
+export function toUndiciForm(form: FormData): UndiciFormData {
+  const out = new UndiciFormData();
+  for (const [k, v] of form.entries()) {
+    if (typeof v === "string") out.append(k, v);
+    else out.append(k, v, v.name);
+  }
+  return out;
 }
 
 /** «fetch failed» от undici ничего не говорит — причина лежит в cause */

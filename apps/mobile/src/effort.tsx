@@ -12,8 +12,8 @@ export function EffortPicker({ efforts, value, onChange, style }: { efforts: str
       title={t("Сколько модель думает перед ответом", "How hard the model thinks before answering")}
       value={v}
       options={[
-        { value: "", label: t("думает: авто", "effort: auto"), hint: t("по умолчанию: как решит модель", "default: as the model decides") },
-        ...efforts.map((x) => ({ value: x, label: `${t("думает", "effort")}: ${x}` })),
+        { value: "", label: "auto", hint: t("по умолчанию: как решит модель", "default: as the model decides") },
+        ...efforts.map((x) => ({ value: x, label: x })),
       ]}
       onChange={onChange}
       style={style}

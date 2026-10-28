@@ -1,6 +1,6 @@
 // Экран группы сессий: название, эмодзи, системный промпт для всех её сессий, удаление.
 import { useEffect, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { client, useHub } from "../store.ts";
 import { back } from "../nav.ts";
 import { Btn } from "../ui.tsx";
@@ -17,17 +17,18 @@ export function Group({ id }: { id: string }) {
   const [name, setName] = useState("");
   const [icon, setIcon] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [noUserRules, setNoUserRules] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    if (g) (setName(g.name), setIcon(g.icon ?? ""), setPrompt(g.prompt ?? ""));
+    if (g) (setName(g.name), setIcon(g.icon ?? ""), setPrompt(g.prompt ?? ""), setNoUserRules(!!g.noUserRules));
   }, [g?.id]);
 
   const fail = (e: Error) => (setBusy(false), dialog(t("Не получилось", "Failed"), e.message));
   const save = () => {
     setBusy(true);
     const done = () => back();
-    if (isNew) void client?.createGroup({ name, icon, prompt }).then(done, fail);
-    else void client?.updateGroup(id, { name, icon, prompt }).then(done, fail);
+    if (isNew) void client?.createGroup({ name, icon, prompt, noUserRules }).then(done, fail);
+    else void client?.updateGroup(id, { name, icon, prompt, noUserRules }).then(done, fail);
   };
   const remove = () =>
     dialog(t("Удалить группу?", "Delete the group?"), t(`«${g?.name}» пропадёт, сессии останутся без группы.`, `“${g?.name}” will be removed, its sessions stay ungrouped.`), [
@@ -72,6 +73,18 @@ export function Group({ id }: { id: string }) {
           placeholderTextColor={C.muted}
         />
         <Text style={S.muted}>{t("Применяется ко всем сессиям группы со следующего сообщения — и к уже идущим, и к перенесённым в группу.", "Applies to all sessions of the group from the next message — running ones and ones moved into the group.")}</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 }}>
+          <View style={{ flex: 1 }}>
+            <Text style={[S.text, { fontWeight: "700" }]}>{t("Без моих глобальных правил", "Without my global rules")}</Text>
+            <Text style={S.muted}>
+              {t(
+                "Claude не читает ~/.claude/CLAUDE.md и ~/.claude/rules: твои правила про код, обращение и стиль. Для чатов не про код (врач, дом). Нужное из них допиши в промпт выше.",
+                "Claude skips ~/.claude/CLAUDE.md and ~/.claude/rules: your rules about coding, how to address you, style. For chats that aren't about code. Put what you need from them into the prompt above.",
+              )}
+            </Text>
+          </View>
+          <Switch value={noUserRules} onValueChange={setNoUserRules} />
+        </View>
         <Btn kind="primary" title={isNew ? t("Создать группу", "Create group") : t("Сохранить", "Save")} busy={busy} disabled={!name.trim()} onPress={save} style={{ marginTop: 12 }} />
         {!isNew ? (
           <>

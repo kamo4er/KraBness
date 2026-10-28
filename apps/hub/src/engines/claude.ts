@@ -39,6 +39,9 @@ const MODELS: Array<{ id: string; name: string }> = [
   { id: "claude-fable-5-1", name: "Claude Fable 5.1" },
 ];
 
+/** какие инструкции не грузить сессиям группы «без моих правил»: ~/.claude/CLAUDE.md и ~/.claude/rules (проверено на 2.1.302) */
+export const NO_USER_RULES = ["**/.claude/CLAUDE.md", "**/.claude/rules/**"];
+
 /** уровни claude --effort (2.1.302: low, medium, high, xhigh, max; Haiku тоже принимает) */
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
@@ -65,6 +68,10 @@ interface Sess {
   system?: string;
   /** уровень рассуждений, с которым запущен процесс (--effort) */
   effort?: string;
+  /** запущен без глобальных правил пользователя (группа «не про код») */
+  noUserRules?: boolean;
+  /** modelUsage из прошлого result этого процесса: CLI отдаёт его накопительно, расход хода — разница */
+  modelUsage?: Record<string, Json>;
   proc?: ChildProcess;
   buf: string;
   busy: boolean;
@@ -306,6 +313,8 @@ export class ClaudeEngine implements Engine {
       "--permission-prompt-tool", "mcp__kamharn__approve",
       ...(s.system ? ["--append-system-prompt", s.system] : []),
       ...(s.effort ? ["--effort", s.effort] : []),
+      // глобальные правила пользователя (обращение, «план → проверка», коммиты) — про код; чату не про код они мешают
+      ...(s.noUserRules ? ["--settings", JSON.stringify({ claudeMdExcludes: NO_USER_RULES })] : []),
       ...(this.opts.extraArgs ?? []),
       // импорт из Claude Code: продолжаем копию, исходный транскрипт (его может держать VS Code) не трогаем
       ...(s.forkFrom ? ["--resume", s.forkFrom, "--fork-session", "--session-id", s.id] : s.hasHistory ? ["--resume", s.id] : ["--session-id", s.id]),
@@ -327,6 +336,8 @@ export class ClaudeEngine implements Engine {
     });
     s.proc = proc;
     s.buf = "";
+    // новый процесс — накопительные счётчики CLI начинаются с нуля
+    s.modelUsage = undefined;
     s.hasHistory = true;
     proc.stdout?.on("data", (d: Buffer) => this.onStdout(s, d));
     proc.stderr?.on("data", (d: Buffer) => this.log(`stderr ${s.id.slice(0, 8)}: ${d.toString().trim().slice(0, 500)}`));
@@ -356,6 +367,38 @@ export class ClaudeEngine implements Engine {
     return proc;
   }
 
+/**
+   * Расход хода из result. usage там за ход, а modelUsage (токены и costUSD по моделям) — накопительно за жизнь
+   * процесса (проверено на 2.1.302), поэтому берём разницу с прошлым result; так видны и субагенты на других моделях.
+   */
+  private usageOf(s: Sess, j: Json): void {
+    const mu = j.modelUsage as Record<string, Json> | undefined;
+    const n = (v: unknown) => Number(v) || 0;
+    const turn = j.uuid ? String(j.uuid) : randomUUID();
+    if (mu && Object.keys(mu).length) {
+      const prev = s.modelUsage ?? {};
+      for (const [model, u] of Object.entries(mu)) {
+        const p = prev[model] ?? {};
+        const d = {
+          input: n(u.inputTokens) - n(p.inputTokens),
+          output: n(u.outputTokens) - n(p.outputTokens),
+          cacheWrite: n(u.cacheCreationInputTokens) - n(p.cacheCreationInputTokens),
+          cacheRead: n(u.cacheReadInputTokens) - n(p.cacheReadInputTokens),
+          cost: n(u.costUSD) - n(p.costUSD),
+        };
+        if (d.input + d.output + d.cacheWrite + d.cacheRead <= 0) continue;
+        this.sink?.usage?.(s.id, { key: `claude:${s.id}:${turn}:${model}`, model, ...d });
+      }
+      s.modelUsage = mu;
+      return;
+    }
+    // старый CLI без modelUsage: только токены хода, цены не знаем
+    const u = j.usage as Json | undefined;
+    if (!u) return;
+    const r = { input: n(u.input_tokens), output: n(u.output_tokens), cacheWrite: n(u.cache_creation_input_tokens), cacheRead: n(u.cache_read_input_tokens) };
+    if (r.input + r.output + r.cacheWrite + r.cacheRead > 0) this.sink?.usage?.(s.id, { key: `claude:${s.id}:${turn}`, model: s.model.modelId, ...r });
+  }
+
   private killProc(s: Sess): void {
     if (s.idleTimer) clearTimeout(s.idleTimer);
     if (s.abortTimer) clearTimeout(s.abortTimer);
@@ -376,12 +419,12 @@ export class ClaudeEngine implements Engine {
   }
 
   /** /compact в режиме -p работает (проверено на 2.1.302): compact_boundary, затем пересказ, память сохраняется. */
-  // system — промпт группы: без него prompt() решил бы, что промпт сменился, и перезапустил процесс без него
-  async compact(engineSessionId: string, o: { model: ModelRef; system?: string; effort?: string }): Promise<void> {
-    await this.prompt(engineSessionId, { text: "/compact", files: [], model: o.model, ...(o.system ? { system: o.system } : {}), ...(o.effort ? { effort: o.effort } : {}) });
+  // system и прочее, с чем запущен процесс: без них prompt() решил бы, что они сменились, и перезапустил процесс без них
+  async compact(engineSessionId: string, o: { model: ModelRef; system?: string; effort?: string; noUserRules?: boolean }): Promise<void> {
+    await this.prompt(engineSessionId, { ...o, text: "/compact", files: [] });
   }
 
-  async prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string; effort?: string }): Promise<void> {
+  async prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string; effort?: string; noUserRules?: boolean }): Promise<void> {
     const s = this.sess(engineSessionId);
     if (s.model.modelId !== o.model.modelId) {
       // смена модели: перезапускаем процесс, транскрипт продолжится с --resume
@@ -396,6 +439,10 @@ export class ClaudeEngine implements Engine {
     // уровень рассуждений тоже задаётся при запуске (--effort): сменился → перезапуск с --resume
     if ((s.effort ?? "") !== (o.effort ?? "")) {
       s.effort = o.effort || undefined;
+      if (s.proc && !s.busy) this.killProc(s);
+    }
+    if (!!s.noUserRules !== !!o.noUserRules) {
+      s.noUserRules = o.noUserRules || undefined;
       if (s.proc && !s.busy) this.killProc(s);
     }
     const proc = this.ensureProc(s);
@@ -702,6 +749,7 @@ export class ClaudeEngine implements Engine {
           const msg = typeof j.result === "string" && j.result ? j.result : Array.isArray(j.errors) ? j.errors.join("; ") : String(j.subtype);
           this.sink?.event(sid, { type: "error", message: msg });
         }
+        this.usageOf(s, j);
         s.busy = false;
         this.sink?.event(sid, { type: "session.updated", patch: { status: "idle" } });
         const idle = this.opts.idleKillMs ?? 20 * 60_000;

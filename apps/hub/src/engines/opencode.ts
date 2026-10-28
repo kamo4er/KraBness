@@ -11,6 +11,7 @@ import type { Engine, EngineSink, PromptFile } from "./types.ts";
 import { killPidTree, killTree, spawn } from "../proc.ts";
 import { readSse } from "../sse.ts";
 import { L } from "../lang.ts";
+import { opencodeRecord } from "../usage.ts";
 
 export interface OpencodeOptions {
   bin?: string;
@@ -385,6 +386,12 @@ export class OpencodeEngine implements Engine {
     );
   }
 
+  /** Все сообщения сессии (для расхода задним числом). */
+  async messages(engineSessionId: string, directory: string): Promise<Json[]> {
+    const r = await this.req("GET", `/session/${engineSessionId}/message`, undefined, directory);
+    return Array.isArray(r) ? r : [];
+  }
+
   async abort(engineSessionId: string): Promise<void> {
     await this.req("POST", `/session/${engineSessionId}/abort`, {}, this.dir(engineSessionId));
   }
@@ -470,6 +477,11 @@ export class OpencodeEngine implements Engine {
             ...(info.summary === true ? { summary: true } : {}),
           },
         });
+        // расход — когда ответ завершён (до этого токены нулевые); ключ по сообщению, повтор события его перезапишет
+        if (info.role === "assistant" && info.time?.completed) {
+          const u = opencodeRecord(info);
+          if (u) this.sink?.usage?.(sid, u);
+        }
         break;
       }
       case "message.part.updated": {

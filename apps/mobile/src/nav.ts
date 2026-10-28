@@ -10,7 +10,7 @@ export type Route =
   /** group — новая сессия сразу в группе */
   | { page: "new"; group?: string }
   /** section — раздел настроек (без него — список разделов) */
-  | { page: "settings"; section?: "general" | "agents" | "connect" | "notify" | "computer" | "updates" }
+  | { page: "settings"; section?: "general" | "agents" | "connect" | "notify" | "computer" | "usage" | "updates" }
   /** модели и провайдеры opencode */
   | { page: "providers" }
   /** свои MCP-серверы и скиллы */
@@ -19,6 +19,8 @@ export type Route =
   | { page: "tasks" }
   /** одна задача: шаги, отчёт, решение */
   | { page: "task"; id: string }
+  /** бот сессии в Telegram */
+  | { page: "sessionBot"; id: string }
   /** экран группы сессий: id "new" — создать */
   | { page: "group"; id: string };
 

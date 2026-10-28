@@ -9,6 +9,7 @@ import { Readable } from "node:stream";
 import { randomBytes } from "node:crypto";
 import { MAX_FILE_BYTES, type FileStore } from "./files.ts";
 import { gitInfo, mimeOf, readFileView, writeTextFile } from "./project.ts";
+import { searchFiles } from "./filesearch.ts";
 import type {
   AppRelease,
   ClaudeLimits,
@@ -45,6 +46,8 @@ import type { Terminal } from "./terminal.ts";
 import type { Providers } from "./providers.ts";
 import type { TelegramBot } from "./telegram.ts";
 import { HttpError, type SessionManager } from "./sessions.ts";
+import type { SessionBots } from "./sessionbot.ts";
+import { dayOf, usageReport } from "./usage.ts";
 import type { McpRegistry } from "./usermcp.ts";
 import { Wake } from "./wake.ts";
 import { L, setHubLang } from "./lang.ts";
@@ -63,6 +66,8 @@ export interface ServerDeps {
   autoCheck?: AutoCheck;
   /** задачи: конвейер над сессиями */
   tasks?: Orchestrator;
+  /** боты сессий в Telegram */
+  sessionBots?: SessionBots;
   /** отправка пушей (FCM); undefined — не настроено */
   push?: { enabled: boolean };
   /** провайдеры моделей opencode (нет — opencode выключен или ещё не стартовал) */
@@ -327,6 +332,17 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     return { ok: true, delaySec };
   });
   app.get("/api/engines", async () => sessions.enginesInfo());
+  // расход токенов за период (локальные даты, включительно); по умолчанию — последние 30 дней
+  app.get<{ Querystring: { from?: string; to?: string } }>("/api/usage", async (req) => {
+    const date = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
+    const to = date(req.query.to) ?? dayOf(Date.now());
+    const from = date(req.query.from) ?? dayOf(Date.now() - 29 * 86_400_000);
+    if (from > to) throw new HttpError(400, L("Начало периода позже конца", "The period starts after it ends"));
+    return usageReport(db, from, to, (id) => {
+      const s = db.getSession(id);
+      return s ? { title: s.title, engine: s.engine } : undefined;
+    });
+  });
   // «Новая сессия»: включённые движки и что по умолчанию. Без настройки — все, по умолчанию первый (opencode)
   const ENGINES: EngineId[] = ["opencode", "claude"];
   const newSessionPrefs = (): NewSessionPrefs => {
@@ -363,7 +379,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   // ---------- группы сессий ----------
 
-  type GroupBody = { name?: string; icon?: string; prompt?: string; sort?: number };
+  type GroupBody = { name?: string; icon?: string; prompt?: string; noUserRules?: boolean; sort?: number };
   app.get("/api/groups", async () => sessions.groups());
   app.post<{ Body: GroupBody }>("/api/groups", async (req) => sessions.createGroup({ ...req.body, name: String(req.body?.name ?? "") }));
   app.patch<{ Params: { id: string }; Body: GroupBody }>("/api/groups/:id", async (req) => sessions.updateGroup(req.params.id, req.body ?? {}));
@@ -388,6 +404,33 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     return deps.telegram;
   };
   app.get("/api/telegram", async () => tg().status());
+  // бот сессии: свой Telegram-бот на одну сессию (токен — только внутрь, наружу не отдаём)
+  const sbots = () => {
+    if (!deps.sessionBots) throw new HttpError(404, L("Боты сессий недоступны", "Session bots are unavailable"));
+    return deps.sessionBots;
+  };
+  app.get<{ Params: { id: string } }>("/api/sessions/:id/telegram", async (req) => sbots().info(req.params.id));
+  app.put<{ Params: { id: string }; Body: { token?: string } }>("/api/sessions/:id/telegram", async (req) => {
+    try {
+      return await sbots().setToken(req.params.id, String(req.body?.token ?? ""));
+    } catch (e) {
+      throw e instanceof HttpError ? e : new HttpError(400, (e as Error).message);
+    }
+  });
+  app.post<{ Params: { id: string } }>("/api/sessions/:id/telegram/code", async (req) => sbots().newCode(req.params.id));
+  app.patch<{ Params: { id: string; chat: string }; Body: { name?: string } }>("/api/sessions/:id/telegram/chats/:chat", async (req) => {
+    try {
+      return sbots().renameChat(req.params.id, Number(req.params.chat), String(req.body?.name ?? ""));
+    } catch (e) {
+      throw e instanceof HttpError ? e : new HttpError(400, (e as Error).message);
+    }
+  });
+  app.delete<{ Params: { id: string; chat: string } }>("/api/sessions/:id/telegram/chats/:chat", async (req) => sbots().unlinkChat(req.params.id, Number(req.params.chat)));
+  app.delete<{ Params: { id: string } }>("/api/sessions/:id/telegram", async (req) => {
+    sessions.get(req.params.id);
+    await sbots().remove(req.params.id);
+    return sbots().info(req.params.id);
+  });
   app.post<{ Body: { token?: string } }>("/api/telegram", async (req) => {
     try {
       return await tg().setToken(String(req.body?.token ?? ""));
@@ -557,6 +600,8 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   app.post<{ Params: { id: string }; Body: { model?: ModelRef } }>("/api/sessions/:id/review", async (req) => sessions.review(req.params.id, modelOf(req.body)));
   app.put<{ Body: { enabled: boolean } }>("/api/claude/mcp", async (req) => sessions.setClaudeMcp(req.body?.enabled === true));
   app.get<{ Params: { id: string } }>("/api/sessions/:id/commands", async (req) => sessions.commands(req.params.id));
+  // «@» в поле ввода: файлы и папки проекта сессии под запрос
+  app.get<{ Params: { id: string }; Querystring: { q?: string } }>("/api/sessions/:id/files", async (req) => searchFiles(sessions.get(req.params.id).directory, String(req.query.q ?? "").slice(0, 300)));
   app.post<{ Body: { id: string } }>("/api/claude/import", async (req) => sessions.importClaude(String(req.body?.id ?? "")));
   app.get("/api/quick-prompts", async () => config.quickPrompts);
   app.put<{ Body: { prompts: unknown } }>("/api/quick-prompts", async (req) => {
@@ -833,6 +878,19 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     sessions.on("delta", onDelta);
     sessions.on("limits", onLimits);
     sessions.on("groups", onGroups);
+    // расход: не чаще раза в 2 с на сессию — у opencode событие приходит на каждое сообщение
+    const usageTimers = new Map<string, NodeJS.Timeout>();
+    const onUsage = (id: string) => {
+      if (usageTimers.has(id)) return;
+      usageTimers.set(
+        id,
+        setTimeout(() => {
+          usageTimers.delete(id);
+          send({ t: "usage", sessionId: id, usage: sessions.sessionUsage(id) });
+        }, 2000),
+      );
+    };
+    sessions.on("usage", onUsage);
 
     socket.on("message", (raw) => {
       let msg: ClientMessage;
@@ -873,6 +931,8 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       sessions.off("delta", onDelta);
       sessions.off("limits", onLimits);
       sessions.off("groups", onGroups);
+      sessions.off("usage", onUsage);
+      for (const timer of usageTimers.values()) clearTimeout(timer);
       offTasks?.();
       langListeners.delete(onLang);
       offUpdate?.();
@@ -881,7 +941,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     });
 
     const limits = sessions.limits;
-    send({ t: "hello", deviceId: req.deviceId, sessions: sessions.list(), groups: sessions.groups(), ...(deps.tasks ? { tasks: deps.tasks.list() } : {}), language: config.config.language ?? "auto", ...(limits ? { limits } : {}), ...(deps.updates ? { update: deps.updates.status() } : {}) });
+    send({ t: "hello", deviceId: req.deviceId, sessions: sessions.list(), groups: sessions.groups(), usage: sessions.usageTotals(), ...(deps.tasks ? { tasks: deps.tasks.list() } : {}), language: config.config.language ?? "auto", ...(limits ? { limits } : {}), ...(deps.updates ? { update: deps.updates.status() } : {}) });
   });
 
   // ---------- веб-UI ----------

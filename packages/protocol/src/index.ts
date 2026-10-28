@@ -92,6 +92,8 @@ export interface SessionGroup {
   icon?: string;
   /** добавляется к системному промпту каждой сессии группы (со следующего сообщения) */
   prompt?: string;
+  /** Claude без глобальных правил пользователя (~/.claude/CLAUDE.md и ~/.claude/rules) — для чатов не про код */
+  noUserRules?: boolean;
   sort: number;
 }
 
@@ -217,7 +219,7 @@ export type ClientMessage =
   | { t: "presence"; active: boolean };
 
 export type ServerMessage =
-  | { t: "hello"; deviceId: string; sessions: SessionInfo[]; limits?: ClaudeLimits; groups?: SessionGroup[]; tasks?: TaskInfo[]; language?: import("./i18n.ts").LangSetting; update?: UpdateStatus }
+  | { t: "hello"; deviceId: string; sessions: SessionInfo[]; limits?: ClaudeLimits; groups?: SessionGroup[]; tasks?: TaskInfo[]; usage?: Record<string, UsageTotals>; language?: import("./i18n.ts").LangSetting; update?: UpdateStatus }
   /** статус обновлений поменялся (нашлась новая версия, идёт установка) */
   | { t: "update"; update: UpdateStatus }
   /** язык поменяли в настройках — переключиться сразу */
@@ -226,6 +228,8 @@ export type ServerMessage =
   | { t: "groups"; groups: SessionGroup[] }
   /** задачи поменялись (статус, шаги, отчёт) */
   | { t: "tasks"; tasks: TaskInfo[] }
+  /** расход сессии изменился */
+  | { t: "usage"; sessionId: string; usage: UsageTotals }
   /** уведомление для приложения: показать самому, без Firebase (если на телефоне выбран такой способ) */
   | { t: "notify"; notice: HubNotice }
   /** лимиты подписки Claude обновились */
@@ -295,6 +299,12 @@ export interface PermissionReplyRequest {
 }
 
 /** Содержимое файла проекта для просмотра. */
+/** файл или папка проекта для «@» в поле ввода; путь относительно папки сессии, через «/» */
+export interface FileHit {
+  path: string;
+  dir?: boolean;
+}
+
 export interface FileView {
   path: string;
   size: number;
@@ -707,3 +717,41 @@ export interface CreateTaskRequest {
 
 /** «Влить» в основную ветку, «Ещё круг» с комментарием, «Выбросить» изменения */
 export type TaskAction = { action: "merge" } | { action: "more"; comment: string } | { action: "discard" };
+
+/** Расход токенов. tokens — новые токены (ввод + вывод + запись в кэш); чтение из кэша — отдельно. cost — $ как по API. */
+export interface UsageTotals {
+  tokens: number;
+  input: number;
+  output: number;
+  cacheWrite: number;
+  cacheRead: number;
+  cost: number;
+  /** часть записей без цены (модель, которой нет в таблице цен) — cost занижен */
+  costUnknown?: boolean;
+}
+
+/** Отчёт о расходе за период (локальные даты YYYY-MM-DD, включительно). */
+export interface UsageReport {
+  from: string;
+  to: string;
+  /** первый день, за который вообще есть записи */
+  firstDay?: string;
+  total: UsageTotals;
+  days: Array<{ day: string } & UsageTotals>;
+  models: Array<{ engine: EngineId; model: string } & UsageTotals>;
+  /** по убыванию новых токенов; deleted — сессию удалили, расход остался */
+  sessions: Array<{ sessionId: string; title: string; engine: EngineId; deleted?: boolean } & UsageTotals>;
+}
+
+/** Бот сессии в Telegram: пишешь ему — уходит агенту этой сессии, ответ и файлы приходят обратно. Токен наружу не отдаётся. */
+export interface SessionBotInfo {
+  configured: boolean;
+  /** @имя бота */
+  bot?: string;
+  /** одноразовый код: «/start <код>» в личке боту подключает чат */
+  code?: string;
+  /** кто подключён */
+  chats: Array<{ id: number; name: string }>;
+  /** последняя ошибка связи с Telegram */
+  error?: string;
+}
