@@ -49,6 +49,8 @@ export interface HubConfig {
   publicUrls?: string[];
   /** общий адрес превью за тем же обратным прокси (своё имя → порт хаба): превью с телефона без Tailscale */
   previewUrl?: string;
+  /** подсказка агентам про живые артефакты (```html) и диаграммы (```mermaid); по умолчанию включена */
+  artifactsHint?: boolean;
   /** удалённый доступ через свой VPS (remote.ts): SSH-туннель + HTTPS на сервере */
   remote?: RemoteSettings;
   engines: {

@@ -37,6 +37,13 @@ import { createWorktree, discardWorktree, GitError, mergeWorktree, removeWorktre
 import { dayOf, emptyTotals, totalsOf, type UsageRecord } from "./usage.ts";
 import { L } from "./lang.ts";
 
+/** Что клиенты KraBness умеют показывать — агенту, чтобы пользовался (на языке хаба, как и прочие промпты агенту). */
+export const artifactsHint = (): string =>
+  L(
+    "Клиент KraBness показывает пользователю блок ```html с целой страницей как живую карточку прямо в чате — так можно показать 3D (three.js с CDN), графики, интерактивные демо. Пиши такую страницу самодостаточной, одним блоком. Диаграммы — блоком ```mermaid.",
+    "The KraBness client shows a ```html block with a whole page to the user as a live card right in the chat: use it for 3D (three.js from a CDN), charts, interactive demos. Make such a page self-contained, in one block. Diagrams: a ```mermaid block.",
+  );
+
 type GroupPatch = { name?: string; icon?: string; prompt?: string; noUserRules?: boolean };
 
 export interface HubEvents {
@@ -213,7 +220,9 @@ export class SessionManager extends EventEmitter<HubEvents> {
   /** Что задаётся движку при запуске процесса: промпт и правила группы, уровень рассуждений. Всё — со следующего сообщения. */
   private launchOpts(s: SessionInfo): { system?: string; effort?: string; noUserRules?: boolean } {
     const g = s.groupId ? this.db.getGroup(s.groupId) : undefined;
-    return { ...(g?.prompt ? { system: g.prompt } : {}), ...(g?.noUserRules ? { noUserRules: true } : {}), ...(s.effort ? { effort: s.effort } : {}) };
+    // подсказка про то, что клиенты умеют показывать, — перед промптом группы
+    const system = [this.config.config.artifactsHint === false ? "" : artifactsHint(), g?.prompt ?? ""].filter(Boolean).join("\n\n");
+    return { ...(system ? { system } : {}), ...(g?.noUserRules ? { noUserRules: true } : {}), ...(s.effort ? { effort: s.effort } : {}) };
   }
 
   /** Сжать контекст агента: история заменяется пересказом, в ленте появляется отметка «контекст сжат». */

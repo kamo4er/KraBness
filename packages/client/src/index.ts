@@ -56,6 +56,7 @@ export { splitArgs, joinArgs, parsePairs } from "./args.ts";
 export { ago, baseName, fmtTokens, fmtCost, localDay } from "./format.ts";
 export { parseFileRef, resolveFileRef, type FileRef } from "./paths.ts";
 export { mentionAt, mentionText, applyMention } from "./mention.ts";
+export { artifactDocument, artifactSource, isArtifactFile, isArtifactLang } from "./artifact.ts";
 export { engineUsable, engineName, modelKey, parseModelKey, modelOptions, optionReady, defaultTaskModels, type EngineModelOption } from "./taskModels.ts";
 export { t, tn, locale, getLang, getLangSetting, applyLangSetting, onLangChange } from "./i18n.ts";
 import { applyLangSetting, locale } from "./i18n.ts";

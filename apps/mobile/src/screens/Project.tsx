@@ -2,11 +2,12 @@
 import { useEffect, useRef, useState, type ComponentRef } from "react";
 import { BackHandler, FlatList, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Directory, Paths } from "expo-file-system";
-import { ApiError, type FileView, type FsEntry, type GitInfo, t } from "@kamharn/client";
+import { ApiError, isArtifactFile, type FileView, type FsEntry, type GitInfo, t } from "@kamharn/client";
 import { client, fmtSize, useHub } from "../store.ts";
 import { back, replace } from "../nav.ts";
 import { download } from "../files.ts";
 import { Markdown } from "../Parts.tsx";
+import { ArtifactFull } from "../Artifact.tsx";
 import { Btn } from "../ui.tsx";
 import { C, S, mono } from "../theme.ts";
 import { Terminal } from "./Terminal.tsx";
@@ -118,6 +119,8 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
   const [file, setFile] = useState<FileView>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  // .html-файл, запущенный живой страницей
+  const [running, setRunning] = useState(false);
   // подсвеченная строка — только у файла, открытого по ссылке; codeY — где в прокрутке начинается текст
   const [hl, setHl] = useState<number>();
   const scroller = useRef<ComponentRef<typeof ScrollView>>(null);
@@ -213,14 +216,20 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
       // handled: при открытой клавиатуре первый тап по «Сохранить» иначе только прячет клавиатуру
       <ScrollView ref={scroller} contentContainerStyle={{ padding: 12, gap: 10 }} keyboardShouldPersistTaps="handled">
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <Btn small title={t("← к списку", "← back to list")} onPress={() => leave(() => (setDraft(undefined), setFile(undefined), setHl(undefined)))} />
+          <Btn small title={t("← к списку", "← back to list")} onPress={() => leave(() => (setDraft(undefined), setFile(undefined), setHl(undefined), setRunning(false)))} />
           <Text style={[S.muted, { flex: 1, fontFamily: mono }]} numberOfLines={1}>
             {name}
             {dirty ? " •" : ""}
             {draft === undefined ? ` · ${fmtSize(file.size)}` : ""}
           </Text>
           {draft === undefined ? (
-            file.sha256 ? <Btn small title={t("Изменить", "Edit")} onPress={() => setDraft(file.text ?? "")} /> : null
+            <>
+              {/* соседние .js и .css по относительным путям не подтянутся — для страниц «всё в одном файле» */}
+              {isArtifactFile(file.path) && !file.binary && file.text !== undefined ? (
+                <Btn small kind="primary" title={`▶ ${t("Запустить", "Run")}`} onPress={() => setRunning(true)} />
+              ) : null}
+              {file.sha256 ? <Btn small title={t("Изменить", "Edit")} onPress={() => setDraft(file.text ?? "")} /> : null}
+            </>
           ) : (
             <>
               <Btn small kind="primary" title={t("Сохранить", "Save")} busy={saving} disabled={!dirty} onPress={() => void save()} />
@@ -276,6 +285,7 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
           </ScrollView>
         )}
         {file.truncated ? <Text style={S.muted}>{t("Показано начало файла.", "Showing the beginning of the file.")}</Text> : null}
+        {running && file.text !== undefined ? <ArtifactFull source={file.text} title={name} onClose={() => setRunning(false)} /> : null}
       </ScrollView>
     );
   }

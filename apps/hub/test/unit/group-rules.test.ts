@@ -63,7 +63,7 @@ test("группа: «без моих правил» хранится и ухо�
   const base = mkdtempSync(join(tmpdir(), "kamharn-grules-"));
   const root = join(base, "Projects");
   mkdirSync(root);
-  const config = new ConfigStore(join(base, "cfg.json"), { roots: [root], dataDir: join(base, "data") });
+  const config = new ConfigStore(join(base, "cfg.json"), { roots: [root], dataDir: join(base, "data"), artifactsHint: false });
   const dbPath = join(base, "t.db");
   const db = new Db(dbPath);
   const sessions = new SessionManager(db, config, new FileStore(db, config));

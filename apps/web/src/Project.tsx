@@ -1,6 +1,7 @@
 // Просмотр проекта сессии без агента: файлы и git-изменения (бесплатно по лимитам).
 import { useEffect, useRef, useState } from "react";
-import { ApiError, type FileView, type FsEntry, type GitInfo, t } from "@kamharn/client";
+import { ApiError, isArtifactFile, type FileView, type FsEntry, type GitInfo, t } from "@kamharn/client";
+import { ArtifactFull } from "./Artifact.tsx";
 import { client, fmtSize, go, useHub } from "./hub.ts";
 import { Markdown } from "./Parts.tsx";
 import { Terminal } from "./Terminal.tsx";
@@ -107,6 +108,8 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
   const [cwd, setCwd] = useState(root);
   const [entries, setEntries] = useState<FsEntry[]>();
   const [file, setFile] = useState<FileView>();
+  // .html-файл, запущенный живой страницей
+  const [running, setRunning] = useState(false);
   const [error, setError] = useState<string>();
   // подсвеченная строка — только у файла, открытого по ссылке
   const [hl, setHl] = useState<number>();
@@ -184,7 +187,7 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
     const name = file.path.split(/[\\/]/).pop()!;
     return (
       <>
-        <div className="row">
+        <div className="row project__filebar">
           <button className="btn btn--small" onClick={close}>
             {t("← к списку", "← back to list")}
           </button>
@@ -198,6 +201,15 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
               <a className="btn btn--small" href={client.rawUrl(file.path)} download={name}>
                 {t("Скачать", "Download")}
               </a>
+              {isArtifactFile(file.path) && !file.binary && file.text !== undefined && (
+                <button
+                  className="btn btn--small btn--primary"
+                  title={t("Открыть страницу живой (на весь экран). Соседние .js и .css по относительным путям не подтянутся — подходит для страниц «всё в одном файле».", "Open the page live (full screen). Sibling .js and .css files by relative paths are not loaded — works for all-in-one-file pages.")}
+                  onClick={() => setRunning(true)}
+                >
+                  ▶ {t("Запустить", "Run")}
+                </button>
+              )}
               {file.sha256 && (
                 <button className="btn btn--small" onClick={() => setDraft(file.text ?? "")}>
                   {t("Изменить", "Edit")}
@@ -260,6 +272,7 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
           <pre className="pre project__text">{file.text}</pre>
         )}
         {file.truncated && <p className="muted">{t("Показано начало файла.", "Showing the beginning of the file.")}</p>}
+        {running && file.text !== undefined && <ArtifactFull source={file.text} title={name} onClose={() => setRunning(false)} />}
       </>
     );
   }

@@ -1,13 +1,14 @@
 // Части сообщения: текст (упрощённый markdown), размышления, инструменты, файлы, запрос подтверждения.
 import { createContext, memo, useContext, useEffect, useState, type ReactNode } from "react";
 import { ActivityIndicator, Image, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View } from "react-native";
-import { parseFileRef, t, type FileRef, type Part, type PermissionReply, type PermissionRequest, type QuestionAnswers, type QuestionRequest } from "@kamharn/client";
+import { isArtifactLang, parseFileRef, t, type FileRef, type Part, type PermissionReply, type PermissionRequest, type QuestionAnswers, type QuestionRequest } from "@kamharn/client";
 import { client, fmtSize } from "./store.ts";
 import { go } from "./nav.ts";
 import { imageUri, openFile, saveFile, shareFile } from "./files.ts";
 import { Btn } from "./ui.tsx";
 import { C, S, mono } from "./theme.ts";
 import { dialog } from "./dialog.tsx";
+import { ArtifactCard, MermaidCard } from "./Artifact.tsx";
 
 // ---------- markdown: блоки кода, заголовки, списки, `код`, **жирный** ----------
 
@@ -66,7 +67,10 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
     <View style={md.wrap}>
       {chunks.map((chunk, i) => {
         if (i % 2 === 0) return chunk.trim() ? <TextBlock key={i} text={chunk} k={`t${i}`} /> : null;
+        const lang = /^([\w+-]*)\n/.exec(chunk)?.[1];
         const code = chunk.replace(/^[\w+-]*\n/, "").replace(/\n$/, "");
+        if (isArtifactLang(lang)) return <ArtifactCard key={i} source={code} />;
+        if (lang?.toLowerCase() === "mermaid") return <MermaidCard key={i} source={code} />;
         return (
           <ScrollView key={i} horizontal style={md.pre} contentContainerStyle={{ padding: 8 }}>
             <Text selectable style={md.preText}>{code}</Text>

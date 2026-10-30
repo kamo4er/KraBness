@@ -125,6 +125,23 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 .md table { border-collapse: collapse; display: block; overflow-x: auto; }
 .md th, .md td { border: 1px solid var(--line); padding: 4px 8px; }
 .md blockquote { margin: .5em 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
+.artifact { margin: .5em 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg2); }
+.artifact__bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.artifact__title { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact__tools { display: flex; gap: 4px; flex-shrink: 0; }
+.artifact__frame { display: block; width: 100%; height: 380px; border: 0; background: #fff; }
+.artifact__wait { height: 120px; display: flex; align-items: center; justify-content: center; }
+.artifact__code { margin: 0; max-height: 380px; overflow: auto; border: 0; border-radius: 0; }
+.artifact-full { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; background: var(--bg); }
+.artifact__frame--full { flex: 1; width: 100%; border: 0; background: #fff; }
+.artifact__code--full { flex: 1; margin: 0; overflow: auto; }
+.mermaid { margin: .5em 0; padding: 12px; overflow-x: auto; background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; }
+.mermaid__diagram { min-width: max-content; }
+.mermaid__diagram svg { display: block; width: auto; max-width: none; height: auto; margin: 0 auto; }
+.md .mermaid__source { margin: 0 0 8px; background: var(--bg); }
+.mermaid--error { border-color: rgba(239,106,106,.45); }
+.mermaid--error .error { margin: 0; white-space: pre-wrap; }
+.mermaid__retry { margin-top: 8px; }
 
 .reasoning__text { white-space: pre-wrap; color: var(--muted); font-size: 13px; border-left: 2px solid var(--line); padding-left: 10px; margin-top: 4px; }
 
@@ -241,6 +258,8 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 
 /* ---------- проект: изменения и файлы ---------- */
 .project__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project__filebar { flex-wrap: wrap; align-items: center; }
+.project__filebar > .mono { overflow-wrap: anywhere; min-width: 0; }
 .tabs { display: flex; gap: 4px; padding: 8px 16px 0; border-bottom: 1px solid var(--line); background: var(--bg2); }
 .tab { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 8px 12px; font: inherit; cursor: pointer; }
 .tab--on { color: var(--text); border-bottom-color: var(--accent); }

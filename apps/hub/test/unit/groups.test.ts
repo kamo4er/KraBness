@@ -14,7 +14,7 @@ async function setup() {
   const base = mkdtempSync(join(tmpdir(), "kamharn-"));
   const root = join(base, "Projects");
   mkdirSync(root);
-  const config = new ConfigStore(join(base, "cfg.json"), { roots: [root], dataDir: join(base, "data") });
+  const config = new ConfigStore(join(base, "cfg.json"), { roots: [root], dataDir: join(base, "data"), artifactsHint: false });
   const db = new Db(join(base, "t.db"));
   const sessions = new SessionManager(db, config, new FileStore(db, config));
   const prompts: Array<{ text: string; system?: string }> = [];

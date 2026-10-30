@@ -1,9 +1,12 @@
 // Отрисовка частей сообщения: текст (markdown), размышления, вызовы инструментов, файлы.
-import { createContext, memo, useContext, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { createContext, isValidElement, memo, useContext, useMemo, useState } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { limitView, parseFileRef, type FileRef, type ClaudeLimits, type Part, type PermissionRequest, type QuestionAnswers, type QuestionRequest, t } from "@kamharn/client";
+import { artifactSource, limitView, parseFileRef, type FileRef, type ClaudeLimits, type Part, type PermissionRequest, type QuestionAnswers, type QuestionRequest, t } from "@kamharn/client";
 import { client, fmtSize } from "./hub.ts";
+import { MermaidDiagram } from "./Mermaid.tsx";
+import { ArtifactCard } from "./Artifact.tsx";
+import { mermaidSource } from "./mermaid.ts";
 
 /** открыть файл по ссылке из ответа (чат даёт его; в просмотре .md-файла ссылок на файлы нет) */
 export const FileRefCtx = createContext<((ref: FileRef) => void) | undefined>(undefined);
@@ -22,24 +25,34 @@ const linkRef = (href: string | undefined): FileRef | undefined => {
 
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const openRef = useContext(FileRefCtx);
+  const components = useMemo<Components>(() => ({
+    pre: ({ node: _, children, ...props }) => {
+      if (isValidElement<{ className?: unknown; children?: unknown }>(children)) {
+        const page = artifactSource(children.props.className, children.props.children);
+        if (page !== undefined) return <ArtifactCard source={page} />;
+        const diagram = mermaidSource(children.props.className, children.props.children);
+        if (diagram !== undefined) return <MermaidDiagram source={diagram} />;
+      }
+      return <pre {...props}>{children}</pre>;
+    },
+    a: ({ node: _, href, ...props }) => {
+      const ref = openRef && linkRef(href);
+      if (ref) return <a {...props} href="#" className="fileref" title={ref.path} onClick={(e) => (e.preventDefault(), openRef(ref))} />;
+      return <a {...props} href={href} target="_blank" rel="noreferrer" />;
+    },
+    code: ({ node, className, children, ...props }) => {
+      // `код` в строке: у блока ``` позиция занимает несколько строк, у инлайна — одну
+      const inline = !className && node?.position?.start.line === node?.position?.end.line;
+      const ref = inline && openRef && typeof children === "string" ? parseFileRef(children) : undefined;
+      if (ref) return <code {...props} className="fileref" role="link" title={t("Открыть файл", "Open the file")} onClick={() => openRef!(ref)}>{children}</code>;
+      return <code {...props} className={className}>{children}</code>;
+    },
+  }), [openRef]);
   return (
     <div className="md">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ node: _, href, ...props }) => {
-            const ref = openRef && linkRef(href);
-            if (ref) return <a {...props} href="#" className="fileref" title={ref.path} onClick={(e) => (e.preventDefault(), openRef(ref))} />;
-            return <a {...props} href={href} target="_blank" rel="noreferrer" />;
-          },
-          code: ({ node, className, children, ...props }) => {
-            // `код` в строке: у блока ``` позиция занимает несколько строк, у инлайна — одну
-            const inline = !className && node?.position?.start.line === node?.position?.end.line;
-            const ref = inline && openRef && typeof children === "string" ? parseFileRef(children) : undefined;
-            if (ref) return <code {...props} className="fileref" role="link" title={t("Открыть файл", "Open the file")} onClick={() => openRef!(ref)}>{children}</code>;
-            return <code {...props} className={className}>{children}</code>;
-          },
-        }}
+        components={components}
       >
         {text}
       </ReactMarkdown>
