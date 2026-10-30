@@ -18,6 +18,7 @@ import { pickOpencodeModel } from "../modelPick.tsx";
 import { EffortPicker } from "../effort.tsx";
 import { SessionUsage } from "../Usage.tsx";
 import { MentionList, useMention } from "../mention.tsx";
+import { CopyActions, copyableText } from "../copy.tsx";
 
 /** Автопроверка с телефона: включить с командами проекта (сохранёнными или предложенными), прогнать сейчас. Править команды удобнее в вебе. */
 async function checksMenu(id: string, on: boolean): Promise<void> {
@@ -359,7 +360,10 @@ function Message({ m, highlight }: { m: MessageView; highlight?: boolean }) {
       {m.parts.map((p) => (
         <PartView key={p.id} part={p} />
       ))}
-      <SpeakButton m={m} />
+      <View style={st.msgActions}>
+        <SpeakButton m={m} />
+        <CopyActions text={copyableText(m)} />
+      </View>
     </View>
   );
 }
@@ -550,6 +554,7 @@ const st = StyleSheet.create({
   bubble: { backgroundColor: C.accent2, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14, borderBottomRightRadius: 4, maxWidth: "88%", gap: 6 },
   assistant: { gap: 8 },
   speak: { alignSelf: "flex-start", paddingVertical: 2 },
+  msgActions: { flexDirection: "row", alignItems: "center", gap: 18 },
   error: { color: C.err, backgroundColor: "#2a1518", padding: 10, borderRadius: 8 },
   working: { color: C.warn },
   composerWrap: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.line, backgroundColor: C.bg2 },
