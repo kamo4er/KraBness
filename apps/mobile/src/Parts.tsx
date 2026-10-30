@@ -1,14 +1,14 @@
 // Части сообщения: текст (упрощённый markdown), размышления, инструменты, файлы, запрос подтверждения.
 import { createContext, memo, useContext, useEffect, useState, type ReactNode } from "react";
 import { ActivityIndicator, Image, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View } from "react-native";
-import { isArtifactLang, parseFileRef, t, type FileRef, type Part, type PermissionReply, type PermissionRequest, type QuestionAnswers, type QuestionRequest } from "@kamharn/client";
+import { isArtifactFile, isArtifactLang, parseFileRef, t, type FileRef, type Part, type PermissionReply, type PermissionRequest, type QuestionAnswers, type QuestionRequest } from "@kamharn/client";
 import { client, fmtSize } from "./store.ts";
 import { go } from "./nav.ts";
 import { imageUri, openFile, saveFile, shareFile } from "./files.ts";
 import { Btn } from "./ui.tsx";
 import { C, S, mono } from "./theme.ts";
 import { dialog } from "./dialog.tsx";
-import { ArtifactCard, MermaidCard } from "./Artifact.tsx";
+import { ArtifactCard, FileArtifact, MermaidCard } from "./Artifact.tsx";
 
 // ---------- markdown: блоки кода, заголовки, списки, `код`, **жирный** ----------
 
@@ -293,7 +293,7 @@ export function FileChip({ fileId, name, mime, size }: { fileId: string; name: s
     ], { cancelable: true });
 
   const icon = isImage ? "🖼" : mime === "application/pdf" ? "📕" : "📄";
-  return (
+  const chip = (
     <Pressable onPress={menu} style={{ gap: 6, alignSelf: "flex-start", maxWidth: "100%" }}>
       {thumb ? <Image source={{ uri: thumb }} style={pt.thumb} resizeMode="cover" /> : null}
       <View style={pt.file}>
@@ -306,6 +306,13 @@ export function FileChip({ fileId, name, mime, size }: { fileId: string; name: s
         {busy ? <ActivityIndicator size="small" color={C.text} /> : <Text style={S.muted}>⋯</Text>}
       </View>
     </Pressable>
+  );
+  if (!isArtifactFile(name)) return chip;
+  return (
+    <View style={{ gap: 6 }}>
+      <FileArtifact url={client!.fileUrl(fileId)} name={name} size={size} />
+      {chip}
+    </View>
   );
 }
 

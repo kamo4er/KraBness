@@ -100,7 +100,7 @@ export function ArtifactFull({ source, title, onClose }: { source: string; title
 }
 
 /** Карточка в ответе агента. */
-export function ArtifactCard({ source }: { source: string }) {
+export function ArtifactCard({ source, title }: { source: string; title?: string }) {
   const live = useSettled(source);
   const [nonce, setNonce] = useState(0);
   const [code, setCode] = useState(false);
@@ -109,7 +109,7 @@ export function ArtifactCard({ source }: { source: string }) {
     <View style={st.card}>
       <View style={st.bar}>
         <Text style={[S.muted, st.title]} numberOfLines={1}>
-          ✨ {t("Живой результат", "Live result")}
+          ✨ {title ?? t("Живой результат", "Live result")}
         </Text>
         <Tools source={source} code={code} onCode={() => setCode(!code)} onRestart={() => setNonce(nonce + 1)} onFull={() => setFull(true)} />
       </View>
@@ -131,7 +131,44 @@ export function ArtifactCard({ source }: { source: string }) {
       ) : (
         <Text style={[S.muted, st.wait]}>{t("Собираю…", "Assembling…")}</Text>
       )}
-      {full ? <ArtifactFull source={source} onClose={() => setFull(false)} /> : null}
+      {full ? <ArtifactFull source={source} title={title} onClose={() => setFull(false)} /> : null}
+    </View>
+  );
+}
+
+/** до стольких байт присланная страница подгружается сама; больше — по кнопке (историю чата не тянем мегабайтами) */
+const AUTO_LOAD = 3 * 1024 * 1024;
+
+/** .html-файл, присланный в чат (send_file_to_user), — такая же живая карточка. */
+export function FileArtifact({ url, name, size }: { url: string; name: string; size: number }) {
+  const [want, setWant] = useState(size <= AUTO_LOAD);
+  const [source, setSource] = useState<string>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    if (!want || source !== undefined) return;
+    let alive = true;
+    fetch(url)
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`))))
+      .then((text) => alive && setSource(text), (e: Error) => alive && setError(e.message));
+    return () => {
+      alive = false;
+    };
+  }, [want, url]);
+  if (source !== undefined) return <ArtifactCard source={source} title={name} />;
+  return (
+    <View style={st.card}>
+      <View style={st.bar}>
+        <Text style={[S.muted, st.title]} numberOfLines={1}>
+          ✨ {name}
+        </Text>
+      </View>
+      {error ? (
+        <Text style={[S.muted, st.wait]}>{`${t("Не загрузилось", "Failed to load")}: ${error}`}</Text>
+      ) : want ? (
+        <Text style={[S.muted, st.wait]}>{t("Загружаю…", "Loading…")}</Text>
+      ) : (
+        <Btn kind="primary" title={`▶ ${t("Показать живой страницей", "Show as a live page")}`} onPress={() => setWant(true)} style={{ margin: 12 }} />
+      )}
     </View>
   );
 }

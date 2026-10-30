@@ -120,7 +120,7 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   // .html-файл, запущенный живой страницей
-  const [running, setRunning] = useState(false);
+  const [running, setRunning] = useState<string>();
   // подсвеченная строка — только у файла, открытого по ссылке; codeY — где в прокрутке начинается текст
   const [hl, setHl] = useState<number>();
   const scroller = useRef<ComponentRef<typeof ScrollView>>(null);
@@ -216,7 +216,7 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
       // handled: при открытой клавиатуре первый тап по «Сохранить» иначе только прячет клавиатуру
       <ScrollView ref={scroller} contentContainerStyle={{ padding: 12, gap: 10 }} keyboardShouldPersistTaps="handled">
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <Btn small title={t("← к списку", "← back to list")} onPress={() => leave(() => (setDraft(undefined), setFile(undefined), setHl(undefined), setRunning(false)))} />
+          <Btn small title={t("← к списку", "← back to list")} onPress={() => leave(() => (setDraft(undefined), setFile(undefined), setHl(undefined), setRunning(undefined)))} />
           <Text style={[S.muted, { flex: 1, fontFamily: mono }]} numberOfLines={1}>
             {name}
             {dirty ? " •" : ""}
@@ -226,7 +226,7 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
             <>
               {/* соседние .js и .css по относительным путям не подтянутся — для страниц «всё в одном файле» */}
               {isArtifactFile(file.path) && !file.binary && file.text !== undefined ? (
-                <Btn small kind="primary" title={`▶ ${t("Запустить", "Run")}`} onPress={() => setRunning(true)} />
+                <Btn small kind="primary" title={`▶ ${t("Запустить", "Run")}`} onPress={() => void client!.fullText(file).then(setRunning, (err: Error) => dialog(t("Не открылось", "Couldn't open"), err.message))} />
               ) : null}
               {file.sha256 ? <Btn small title={t("Изменить", "Edit")} onPress={() => setDraft(file.text ?? "")} /> : null}
             </>
@@ -285,7 +285,7 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
           </ScrollView>
         )}
         {file.truncated ? <Text style={S.muted}>{t("Показано начало файла.", "Showing the beginning of the file.")}</Text> : null}
-        {running && file.text !== undefined ? <ArtifactFull source={file.text} title={name} onClose={() => setRunning(false)} /> : null}
+        {running !== undefined ? <ArtifactFull source={running} title={name} onClose={() => setRunning(undefined)} /> : null}
       </ScrollView>
     );
   }

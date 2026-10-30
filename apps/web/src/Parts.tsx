@@ -2,10 +2,10 @@
 import { createContext, isValidElement, memo, useContext, useMemo, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { artifactSource, limitView, parseFileRef, type FileRef, type ClaudeLimits, type Part, type PermissionRequest, type QuestionAnswers, type QuestionRequest, t } from "@kamharn/client";
+import { artifactSource, isArtifactFile, limitView, parseFileRef, type FileRef, type ClaudeLimits, type Part, type PermissionRequest, type QuestionAnswers, type QuestionRequest, t } from "@kamharn/client";
 import { client, fmtSize } from "./hub.ts";
 import { MermaidDiagram } from "./Mermaid.tsx";
-import { ArtifactCard } from "./Artifact.tsx";
+import { ArtifactCard, FileArtifact } from "./Artifact.tsx";
 import { mermaidSource } from "./mermaid.ts";
 
 /** открыть файл по ссылке из ответа (чат даёт его; в просмотре .md-файла ссылок на файлы нет) */
@@ -203,6 +203,7 @@ export function FileChip({ fileId, name, mime, size }: { fileId: string; name: s
   const isImage = mime.startsWith("image/") && mime !== "image/heic";
   return (
     <div className="file">
+      {isArtifactFile(name) && <FileArtifact url={url} name={name} size={size} />}
       {isImage && (
         <a href={url} target="_blank" rel="noreferrer">
           <img className="file__img" src={url} alt={name} loading="lazy" />

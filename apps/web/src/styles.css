@@ -162,6 +162,7 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 .diff__add { color: var(--ok); white-space: pre-wrap; word-break: break-all; }
 
 .file { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.file > .artifact { align-self: stretch; margin: 0; }
 .file__img { max-width: 280px; max-height: 220px; border-radius: 8px; border: 1px solid var(--line); display: block; }
 .file__chip { display: inline-flex; align-items: center; gap: 8px; background: var(--bg3); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; color: var(--text); text-decoration: none; max-width: 100%; }
 .file__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

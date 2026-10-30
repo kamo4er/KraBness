@@ -416,6 +416,13 @@ export class HubClient {
   rawUrl(path: string): string {
     return `${this.baseUrl}/api/fs/raw?path=${encodeURIComponent(path)}` + (this.token ? `&token=${encodeURIComponent(this.token)}` : "");
   }
+  /** Текст открытого файла целиком: просмотр отдаёт только начало больших файлов (страница с моделью внутри весит мегабайты). */
+  async fullText(file: FileView): Promise<string> {
+    if (!file.truncated && file.text !== undefined) return file.text;
+    const r = await fetch(this.rawUrl(file.path));
+    if (!r.ok) throw new ApiError(r.status, `${r.status} ${r.statusText}`);
+    return r.text();
+  }
   git = (id: string) => this.api<GitInfo>("GET", `/api/sessions/${id}/git`);
   /** Продолжить сессию на бесплатной модели (opencode) с выжимкой контекста. */
   /** model — модель opencode (без неё — по умолчанию) */

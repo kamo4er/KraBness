@@ -109,7 +109,7 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
   const [entries, setEntries] = useState<FsEntry[]>();
   const [file, setFile] = useState<FileView>();
   // .html-файл, запущенный живой страницей
-  const [running, setRunning] = useState(false);
+  const [running, setRunning] = useState<string>();
   const [error, setError] = useState<string>();
   // подсвеченная строка — только у файла, открытого по ссылке
   const [hl, setHl] = useState<number>();
@@ -158,6 +158,7 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
     setDraft(undefined);
     setSaveError(undefined);
     setFile(undefined);
+    setRunning(undefined);
     setHl(undefined);
   }
 
@@ -205,7 +206,7 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
                 <button
                   className="btn btn--small btn--primary"
                   title={t("Открыть страницу живой (на весь экран). Соседние .js и .css по относительным путям не подтянутся — подходит для страниц «всё в одном файле».", "Open the page live (full screen). Sibling .js and .css files by relative paths are not loaded — works for all-in-one-file pages.")}
-                  onClick={() => setRunning(true)}
+                  onClick={() => void client.fullText(file).then(setRunning, (err: Error) => setError(err.message))}
                 >
                   ▶ {t("Запустить", "Run")}
                 </button>
@@ -272,7 +273,7 @@ function Files({ root, initial, line }: { root: string; initial?: string; line?:
           <pre className="pre project__text">{file.text}</pre>
         )}
         {file.truncated && <p className="muted">{t("Показано начало файла.", "Showing the beginning of the file.")}</p>}
-        {running && file.text !== undefined && <ArtifactFull source={file.text} title={name} onClose={() => setRunning(false)} />}
+        {running !== undefined && <ArtifactFull source={running} title={name} onClose={() => setRunning(undefined)} />}
       </>
     );
   }
