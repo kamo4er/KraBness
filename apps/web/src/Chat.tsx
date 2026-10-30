@@ -668,12 +668,13 @@ function PreviewButton({ sessionId }: { sessionId: string }) {
       client.ports(sessionId).then(setPorts, () => setPorts([]));
     }
   };
-  const go = (p: ListeningPort) => {
+  // notes — с панелью замечаний по вёрстке: только через прокси хаба (он вставляет панель), даже на ПК
+  const go = (p: ListeningPort, notes = false) => {
     setOpen(false);
-    if (local) return void window.open(`http://localhost:${p.port}/`, "_blank");
+    if (local && !notes) return void window.open(`http://localhost:${p.port}/`, "_blank");
     // окно открываем сразу (иначе браузер посчитает его всплывающим), адрес подставляем после ответа хаба
     const w = window.open("about:blank", "_blank");
-    client.openPreview(p.port).then(
+    client.openPreview(p.port, notes ? sessionId : undefined).then(
       (r) => (w ? (w.location.href = r.url) : window.open(r.url, "_blank")),
       (e: Error) => (w?.close(), alert(e.message)),
     );
@@ -688,12 +689,19 @@ function PreviewButton({ sessionId }: { sessionId: string }) {
           {!ports && <li className="muted pad">{t("Ищу порты…", "Looking for ports…")}</li>}
           {ports && !ports.length && <li className="muted pad">{t("Нет запущенных веб-серверов. Попроси агента запустить dev-сервер.", "No web servers running. Ask the agent to start a dev server.")}</li>}
           {ports?.map((p) => (
-            <li key={p.port}>
+            <li key={p.port} className="preview__port">
               <button className="slash__item" onClick={() => go(p)}>
                 <span>
                   <span className="slash__name">:{p.port}</span> {p.process} {p.project ? <span className="muted">· {t("этот проект", "this project")}</span> : null}
                 </span>
                 <span className="muted">{p.command}</span>
+              </button>
+              <button
+                className="btn btn--small preview__notes"
+                title={t("Открыть с панелью замечаний: тыкаешь в элементы, пишешь, что не так, и отправляешь агенту этой сессии", "Open with the comments panel: tap elements, write what's wrong and send it to this session's agent")}
+                onClick={() => go(p, true)}
+              >
+                💬 {t("замечания", "comments")}
               </button>
             </li>
           ))}

@@ -589,6 +589,29 @@ export interface ListeningPort {
   project: boolean;
 }
 
+/** Замечание по вёрстке: человек ткнул в элемент на странице превью и написал, что не так. */
+export interface LayoutComment {
+  text: string;
+  /** CSS-селектор, однозначно находящий элемент на странице */
+  selector: string;
+  /** начало outerHTML элемента */
+  html: string;
+  /** положение на странице (с учётом прокрутки), CSS-пиксели */
+  rect: { x: number; y: number; w: number; h: number };
+  /** вычисленные стили, которые обычно важны для вёрстки */
+  styles: Record<string, string>;
+  /** снимок элемента: data:image/png;base64,… (может не получиться — тогда нет) */
+  image?: string;
+}
+
+/** Пачка замечаний со страницы превью → одно сообщение агенту. */
+export interface LayoutComments {
+  url: string;
+  title?: string;
+  viewport: { w: number; h: number; dpr: number };
+  items: LayoutComment[];
+}
+
 /** Сессия Claude Code (транскрипт ~/.claude/projects), которую можно продолжить в KamHarn. */
 export interface ClaudeTranscript {
   id: string;

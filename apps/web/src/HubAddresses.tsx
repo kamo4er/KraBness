@@ -21,7 +21,23 @@ export function HubAddresses() {
   const [checks, setChecks] = useState<Record<string, Check>>({});
   const [error, setError] = useState<string>();
   const [msg, setMsg] = useState<string>();
-  const load = (r: { urls: string[]; publicUrls: string[] }) => {
+  // общий адрес превью за тем же прокси (своё имя на порт хаба)
+  const [preview, setPreview] = useState<string>();
+  const [previewSaved, setPreviewSaved] = useState("");
+  const [previewMsg, setPreviewMsg] = useState<{ ok: boolean; text: string }>();
+  const savePreview = async () => {
+    setPreviewMsg(undefined);
+    try {
+      const r = await client.setPreviewUrl(preview ?? "");
+      setPreviewSaved(r.previewUrl);
+      setPreview(undefined);
+      setPreviewMsg({ ok: true, text: r.previewUrl ? t("Сохранено. Превью с телефона пойдёт через этот адрес сразу, без перезапуска.", "Saved. Previews from the phone go through this address right away, no restart.") : t("Общий адрес превью убран.", "The shared preview address is removed.") });
+    } catch (e) {
+      setPreviewMsg({ ok: false, text: (e as Error).message });
+    }
+  };
+  const load = (r: { urls: string[]; publicUrls: string[]; previewUrl?: string }) => {
+    if (r.previewUrl !== undefined) setPreviewSaved(r.previewUrl);
     setUrls(r.urls.filter((u) => !/\/\/(127\.0\.0\.1|localhost)[:/]/.test(u + "/")));
     setOwn(r.publicUrls);
   };
@@ -80,6 +96,20 @@ export function HubAddresses() {
       </div>
       {msg && <p className="muted">{msg}</p>}
       {error && <p className="error">{error}</p>}
+      <h3>{t("Адрес для превью", "Preview address")}</h3>
+      <p className="muted">
+        {t(
+          "Превью dev-сервера с телефона идёт через Tailscale. Чтобы оно открывалось и через твой прокси, заведи на нём ещё одно имя (например, preview.<твой домен>) на тот же адрес и порт хаба и впиши его сюда.",
+          "A dev server preview from the phone goes through Tailscale. To open it through your proxy too, add one more name on it (e.g. preview.<your domain>) pointing to the same hub address and port, and put it here.",
+        )}
+      </p>
+      <div className="row">
+        <input className="input mono" style={{ flex: 1 }} placeholder="https://preview.krab.example.com" value={preview ?? previewSaved} onChange={(e) => setPreview(e.target.value)} />
+        <button className="btn btn--primary" disabled={preview === undefined} onClick={() => void savePreview()}>
+          {t("Сохранить", "Save")}
+        </button>
+      </div>
+      {previewMsg && <p className={previewMsg.ok ? "muted" : "error"}>{previewMsg.text}</p>}
     </section>
   );
 }

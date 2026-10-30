@@ -172,6 +172,9 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 .slash__item:hover { background: var(--bg3); }
 .slash__item .muted { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slash__name { font-family: var(--mono); color: var(--accent); }
+.preview__port { display: flex; align-items: center; gap: 4px; }
+.preview__port .slash__item { flex: 1; min-width: 0; }
+.preview__notes { flex-shrink: 0; white-space: nowrap; }
 .mention__item { flex-direction: row; align-items: baseline; gap: 6px; }
 .mention__item--on { background: var(--bg3); }
 .mention__name { font-family: var(--mono); white-space: nowrap; }

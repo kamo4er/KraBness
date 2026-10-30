@@ -47,6 +47,8 @@ export interface HubConfig {
   checks?: Record<string, string[]>;
   /** адреса хаба за своим обратным прокси (NAS, роутер с белым IP): попадают в известные адреса и QR */
   publicUrls?: string[];
+  /** общий адрес превью за тем же обратным прокси (своё имя → порт хаба): превью с телефона без Tailscale */
+  previewUrl?: string;
   /** удалённый доступ через свой VPS (remote.ts): SSH-туннель + HTTPS на сервере */
   remote?: RemoteSettings;
   engines: {
@@ -191,6 +193,12 @@ export class ConfigStore {
   setPublicUrls(list: string[]): void {
     if (list.length) this.config.publicUrls = list;
     else delete this.config.publicUrls;
+    this.save();
+  }
+
+  setPreviewUrl(url: string | undefined): void {
+    if (url) this.config.previewUrl = url;
+    else delete this.config.previewUrl;
     this.save();
   }
 

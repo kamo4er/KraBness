@@ -308,7 +308,13 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   app.delete("/api/remote", async () => remote().remove());
   app.post("/api/remote/test", async () => remote().test());
   // адреса хаба: все известные (в QR) и свои за прокси (NAS, роутер с белым IP)
-  app.get("/api/addresses", async () => ({ urls: deps.urls(), publicUrls: config.config.publicUrls ?? [] }));
+  app.get("/api/addresses", async () => ({ urls: deps.urls(), publicUrls: config.config.publicUrls ?? [], previewUrl: config.config.previewUrl ?? "" }));
+  // общий адрес превью за своим прокси (NAS): своё имя, направленное на порт хаба; "" — убрать
+  app.put<{ Body: { url?: unknown } }>("/api/addresses/preview", async (req) => {
+    const raw = String(req.body?.url ?? "").trim();
+    config.setPreviewUrl(raw ? checkPublicUrl(raw) : undefined);
+    return { previewUrl: config.config.previewUrl ?? "" };
+  });
   app.put<{ Body: { publicUrls?: unknown } }>("/api/addresses", async (req) => {
     const list = req.body?.publicUrls;
     if (!Array.isArray(list) || !list.every((x) => typeof x === "string")) throw new HttpError(400, L("publicUrls: массив адресов", "publicUrls: an array of addresses"));
@@ -533,13 +539,16 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   app.get<{ Querystring: { session?: string } }>("/api/ports", async (req) =>
     ports(req.query.session ? sessions.get(req.query.session).directory : undefined),
   );
-  app.post<{ Body: { port?: number } }>("/api/preview", async (req) => {
+  // session — режим замечаний: панель на странице, замечания уходят агенту этой сессии
+  app.post<{ Body: { port?: number; session?: string; via?: string } }>("/api/preview", async (req) => {
     if (!deps.previews) throw new HttpError(409, L("Превью недоступно", "Preview is unavailable"));
     const port = Number(req.body?.port);
     const target = (await ports()).find((p) => p.port === port);
     if (!target) throw new HttpError(404, L(`Порт ${port} никто не слушает`, `Nothing listens on port ${port}`));
     try {
-      return { url: await deps.previews.open(target) };
+      const session = req.body?.session ? sessions.get(String(req.body.session)).id : undefined;
+      const via = typeof req.body?.via === "string" ? req.body.via : undefined;
+      return { url: await deps.previews.open(target, { ...(session ? { session } : {}), ...(via ? { via } : {}) }) };
     } catch (e) {
       throw new HttpError(409, (e as Error).message);
     }

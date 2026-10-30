@@ -486,7 +486,8 @@ export class HubClient {
   saveRemote = (r: Partial<RemoteSettings>) => this.api<RemoteStatus>("PUT", "/api/remote", r);
   removeRemote = () => this.api<RemoteStatus>("DELETE", "/api/remote");
   testRemote = () => this.api<{ ok: true; ms: number }>("POST", "/api/remote/test", {});
-  addresses = () => this.api<{ urls: string[]; publicUrls: string[] }>("GET", "/api/addresses");
+  addresses = () => this.api<{ urls: string[]; publicUrls: string[]; previewUrl: string }>("GET", "/api/addresses");
+  setPreviewUrl = (url: string) => this.api<{ previewUrl: string }>("PUT", "/api/addresses/preview", { url });
   checks = (id: string) => this.api<ChecksConfig>("GET", `/api/sessions/${id}/checks`);
   setChecks = (id: string, commands: string[]) => this.api<ChecksConfig>("PUT", `/api/sessions/${id}/checks`, { commands });
   runChecks = (id: string) => this.api("POST", `/api/sessions/${id}/checks/run`, {});
@@ -541,7 +542,9 @@ export class HubClient {
   /** dev-серверы на ПК; с sessionId — порты этого проекта первыми */
   ports = (sessionId?: string) => this.api<ListeningPort[]>("GET", "/api/ports" + (sessionId ? `?session=${encodeURIComponent(sessionId)}` : ""));
   /** ссылка на превью порта для этого устройства (через Tailscale) */
-  openPreview = (port: number) => this.api<{ url: string }>("POST", "/api/preview", { port });
+  /** session — с панелью замечаний по вёрстке (уйдут агенту этой сессии) */
+  // via — по какому адресу клиент ходит в хаб: через NAS/свой домен хаб даст общий адрес превью, иначе — Tailscale
+  openPreview = (port: number, session?: string) => this.api<{ url: string }>("POST", "/api/preview", { port, via: this.baseUrl, ...(session ? { session } : {}) });
   sleepPc = (delaySec = 20) => this.api<{ ok: true; delaySec: number }>("POST", "/api/hub/sleep", { delaySec });
   wakeConfig = () => this.api<WakeRuntime>("GET", "/api/wake");
   // ---------- «Новая сессия»: включённые движки и выбор по умолчанию ----------

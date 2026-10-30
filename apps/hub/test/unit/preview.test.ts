@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import WebSocket, { WebSocketServer } from "ws";
-import { Previews } from "../../src/preview.ts";
+import { previewHost, Previews } from "../../src/preview.ts";
 
 async function devServer() {
   const seen: Array<{ host?: string; cookie?: string; origin?: string }> = [];
@@ -104,4 +104,12 @@ test("превью: порт на адресе занят — запасной; 
     dev.wss.close();
     await new Promise((r) => dev.server.close(r));
   }
+});
+
+test("адрес превью: Tailscale раньше домашней сети, публичные адреса и localhost — нет", () => {
+  const urls = ["http://127.0.0.1:7420", "http://192.168.0.10:7420", "http://100.101.102.103:7420", "https://krab.example.org"];
+  assert.equal(previewHost(urls), "100.101.102.103");
+  assert.equal(previewHost(urls.filter((u) => !u.includes("100.101"))), "192.168.0.10");
+  assert.equal(previewHost(["http://127.0.0.1:7420", "https://krab.example.org"]), undefined);
+  assert.equal(previewHost(["http://100.200.1.1:7420", "http://10.0.0.5:7420"]), "100.200.1.1", "100.200 — не Tailscale, просто первый");
 });

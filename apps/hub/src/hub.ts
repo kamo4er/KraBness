@@ -1,5 +1,6 @@
 // Сборка хаба целиком: конфиг → БД → движки → HTTP/WS. Используется и main.ts, и тестами.
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -16,7 +17,8 @@ import { FileStore } from "./files.ts";
 import { PushSender } from "./push.ts";
 import { Notifier } from "./notifier.ts";
 import { AutoResume } from "./autoresume.ts";
-import { Previews } from "./preview.ts";
+import { previewHost, Previews } from "./preview.ts";
+import { sendLayoutComments } from "./comments.ts";
 import { Terminal } from "./terminal.ts";
 import { Providers } from "./providers.ts";
 import { TelegramBot } from "./telegram.ts";
@@ -155,7 +157,12 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   // провайдеры моделей появляются, когда стартует opencode (после listen)
   let providers: Providers | undefined;
   // превью dev-серверов открывается на Tailscale-адресе хаба
-  const previews = new Previews(() => urls.map((u) => new URL(u).hostname).find((h) => h !== "127.0.0.1" && h !== "localhost"), log);
+  // режим замечаний: панель — из сборки веба, замечания — агенту сессии, из которой открыто превью
+  const webDir = opts.webDir ?? join(REPO_ROOT, "apps", "web", "dist");
+  const previews = new Previews(() => previewHost(urls), log, undefined, {
+    overlay: () => join(webDir, "krab-overlay.js"),
+    onComments: (sid, body) => sendLayoutComments(sessions, files, sid, body),
+  }, () => config.config.previewUrl);
   let restartTimer: NodeJS.Timeout | undefined;
   let sleepTimer: NodeJS.Timeout | undefined;
   const scheduleRestart = (delayMs: number) => {
@@ -205,7 +212,7 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
           },
         }
       : {}),
-    webDir: opts.webDir ?? join(REPO_ROOT, "apps", "web", "dist"),
+    webDir,
   });
   registerMcp(app, {
     secret: mcpSecret,
@@ -221,6 +228,18 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
 
   await app.listen({ host: hosts[0], port: cfg.port });
   const port = (app.server.address() as { port: number }).port;
+
+  // общий адрес превью (своё имя за NAS → этот же порт): такие запросы — в прокси превью, мимо API хаба.
+  // Перехватываем на уровне сервера: до роутера Fastify и до WebSocket-плагина.
+  for (const ev of ["request", "upgrade"] as const) {
+    const own = app.server.listeners(ev) as Array<(...a: unknown[]) => void>;
+    app.server.removeAllListeners(ev);
+    app.server.on(ev, (req: IncomingMessage, ...rest: unknown[]) => {
+      if (!previews.isShared(req)) return void own.forEach((f) => f.call(app.server, req, ...rest));
+      if (ev === "request") previews.handleShared(req, rest[0] as ServerResponse);
+      else previews.upgradeShared(req, rest[0] as Socket, rest[1] as Buffer);
+    });
+  }
 
   // дополнительные адреса — отдельные http-серверы, которые отдают запросы тому же приложению
   const bind = async (host: string): Promise<Server> => {

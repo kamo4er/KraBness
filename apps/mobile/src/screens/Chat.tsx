@@ -633,10 +633,14 @@ function PreviewSheet({ sessionId, visible, onClose }: { sessionId: string; visi
       visible={visible}
       title={t("Превью dev-сервера", "Dev server preview")}
       empty={ports ? t("Не нашёл запущенных веб-серверов на ПК. Попроси агента запустить dev-сервер.", "No web servers running on the PC. Ask the agent to start a dev server.") : t("Ищу порты…", "Looking for ports…")}
-      options={(ports ?? []).map((p) => ({ value: String(p.port), label: `:${p.port} · ${p.process}`, hint: p.project ? t("этот проект", "this project") : p.command.slice(0, 80) }))}
+      // у каждого порта второй вариант — с панелью замечаний по вёрстке (уйдут агенту этой сессии)
+      options={(ports ?? []).flatMap((p) => [
+        { value: String(p.port), label: `:${p.port} · ${p.process}`, hint: p.project ? t("этот проект", "this project") : p.command.slice(0, 80) },
+        { value: `${p.port}:notes`, label: `   💬 :${p.port} ${t("с замечаниями", "with comments")}`, hint: t("тыкаешь в элементы, пишешь, что не так, — агенту", "tap elements, write what's wrong, send to the agent") },
+      ])}
       onClose={onClose}
       onPick={(v) =>
-        void client?.openPreview(Number(v)).then(
+        void client?.openPreview(Number(v.split(":")[0]), v.endsWith(":notes") ? sessionId : undefined).then(
           (r) => Linking.openURL(r.url),
           (e: Error) => dialog(t("Превью не открылось", "Preview didn't open"), e.message),
         )
