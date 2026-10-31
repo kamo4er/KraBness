@@ -33,6 +33,12 @@ def state(s: str) -> None:
     log(f"STATE {s}")
 
 
+def unfinished(text: str) -> bool:
+    """Похоже, фразу оборвала пауза: Whisper поставил «...», запятую, тире или вовсе не поставил точку."""
+    t = text.strip()
+    return t.endswith(("...", "…", ",", "-", "—")) or not t.endswith((".", "!", "?"))
+
+
 class FeedEnd(Exception):
     """Проверка из файла (--feed): звук кончился."""
 
@@ -190,8 +196,8 @@ class Voice:
 
     # ---------- цикл ----------
 
-    def record_command(self) -> np.ndarray | None:
-        """После активатора: до паузы ~1 с, не дольше max_sec; тишина 5 с — отмена."""
+    def record_command(self, start_timeout: float = 5.0) -> np.ndarray | None:
+        """После активатора: до паузы (--pause), не дольше max_sec; тишина start_timeout до начала речи — отмена."""
         chunks: list[np.ndarray] = []
         heard = False
         silent = 0.0
@@ -206,7 +212,7 @@ class Voice:
                 silent += FRAME / RATE
             if heard and silent > self.args.pause:
                 break
-            if not heard and silent > 5:
+            if not heard and silent > start_timeout:
                 return None
         return np.concatenate(chunks).astype(np.float32) / 32768 if heard else None
 
@@ -247,6 +253,14 @@ class Voice:
         if not matched:
             return None
         log(f"wake: {text}")
+        if rest and unfinished(rest):
+            # пауза посреди фразы: дослушиваем продолжение и приклеиваем
+            more = self.record_command(start_timeout=self.args.continue_sec)
+            if more is not None:
+                extra = self.transcribe(more)
+                if extra:
+                    log(f"continued: {extra}")
+                    rest = f"{rest.rstrip(' .…')} {extra}"
         return rest
 
     def handle(self, text: str) -> None:
@@ -334,8 +348,9 @@ def main() -> None:
     p.add_argument("--lang", default="ru")
     p.add_argument("--device", default=None, help="микрофон (номер или часть имени); по умолчанию системный")
     p.add_argument("--speech-rms", dest="speech_rms", type=float, default=0.015)
-    p.add_argument("--pause", type=float, default=1.0)
-    p.add_argument("--wake-pause", dest="wake_pause", type=float, default=0.7, help="пауза, после которой фраза считается законченной")
+    p.add_argument("--pause", type=float, default=1.6, help="пауза, после которой команда (после сигнала) считается законченной")
+    p.add_argument("--wake-pause", dest="wake_pause", type=float, default=1.3, help="пауза, после которой фраза считается законченной")
+    p.add_argument("--continue-sec", dest="continue_sec", type=float, default=2.0, help="сколько ждать продолжения незаконченной фразы")
     p.add_argument("--max-sec", dest="max_sec", type=float, default=20)
     p.add_argument("--list-devices", action="store_true")
     p.add_argument("--feed", help="проверка: WAV 16 кГц моно вместо микрофона")

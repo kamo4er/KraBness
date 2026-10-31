@@ -249,7 +249,7 @@ function Header({ info, conn, onSearch, talk }: { info: SessionInfo; conn: Retur
               {
                 text: talk ? t("Разговор: вкл", "Talk mode: on") : t("Разговор: выкл", "Talk mode: off"),
                 icon: "🗣",
-                hint: t("отпустил микрофон — сообщение ушло, ответ звучит вслух", "release the mic — the message is sent, the answer is read aloud"),
+                hint: t("выключил микрофон — сообщение ушло, ответ звучит вслух", "mic off — the message is sent, the answer is read aloud"),
                 onPress: () => setTalk(info.id, !talk),
               },
               {
@@ -524,7 +524,7 @@ function Composer({ sessionId, busy, slash, talk }: { sessionId: string; busy: b
           ))}
         </ScrollView>
       ) : null}
-      {talk && canVoice ? <Text style={st.talkHint}>🗣 {t("Разговор: держи 🎤 и говори — отпустишь, и сообщение уйдёт само, а ответ прочитаю вслух", "Talk mode: hold 🎤 and speak — release and the message is sent, the answer is read aloud")}</Text> : null}
+      {talk && canVoice ? <Text style={st.talkHint}>🗣 {t("Разговор: нажми 🎤 и говори, нажми ⏹ — сообщение уйдёт само, ответ прочитаю вслух", "Talk mode: tap 🎤 and speak, tap ⏹ — the message is sent, the answer is read aloud")}</Text> : null}
       <View style={st.composer}>
         {/* «/» нужна, только чтобы начать команду — при наборе текста место отдаём полю */}
         {slash && commands.length && !text ? <Btn title="/" style={st.iconBtn} onPress={() => setText("/")} /> : null}
@@ -540,22 +540,22 @@ function Composer({ sessionId, busy, slash, talk }: { sessionId: string; busy: b
           onChangeText={setText}
         />
         {busy ? <Btn kind="danger" title="■" style={st.iconBtn} onPress={() => void client?.abort(sessionId)} /> : null}
-        {/* как в Telegram: пусто — 🎤 (держи и говори), есть текст — ➤ (долгое нажатие — дописать голосом) */}
+        {/* пусто — 🎤: нажал — пишет, нажал ⏹ — стоп (держать не нужно); есть текст — ➤, долгое нажатие — дописать голосом */}
         <Pressable
           disabled={sending || uploading}
-          delayLongPress={250}
+          delayLongPress={350}
           onPress={() => {
-            if (text.trim() || ready.length) void send();
-            else if (canVoice) ToastAndroid.show(t("Удерживай кнопку и говори", "Hold the button and speak"), ToastAndroid.SHORT);
+            if (dictation.listening) dictation.stop();
+            else if (text.trim() || ready.length) void send();
+            else if (canVoice) void dictation.start();
           }}
-          onLongPress={canVoice ? () => void dictation.hold() : undefined}
-          onPressOut={dictation.release}
+          onLongPress={canVoice && !dictation.listening ? () => void dictation.start() : undefined}
           style={({ pressed }) => [st.send, dictation.listening && st.sendRec, (pressed || sending || uploading) && { opacity: 0.7 }]}
         >
           {sending ? (
             <ActivityIndicator size="small" color={C.text} />
           ) : (
-            <Text style={{ color: "#fff", fontSize: 18 }}>{dictation.listening ? "●" : text.trim() || ready.length || !canVoice ? "➤" : "🎤"}</Text>
+            <Text style={{ color: "#fff", fontSize: 18 }}>{dictation.listening ? "⏹" : text.trim() || ready.length || !canVoice ? "➤" : "🎤"}</Text>
           )}
         </Pressable>
       </View>

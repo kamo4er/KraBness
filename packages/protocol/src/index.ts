@@ -797,6 +797,8 @@ export interface VoiceStatus {
   log: string[];
   /** микрофон (номер или часть имени); пусто — системный */
   device: string;
+  /** пауза конца фразы, с */
+  pause: number;
 }
 
 /** Найденное поиском по всем чатам (`GET /api/search`). */

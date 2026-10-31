@@ -10,6 +10,8 @@ import { killTree, spawn } from "./proc.ts";
 import { L } from "./lang.ts";
 
 const LOG_LINES = 40;
+/** пауза конца фразы по умолчанию (с), как в voice/main.py --wake-pause */
+export const DEFAULT_PAUSE = 1.3;
 
 export interface VoiceDeps {
   config: ConfigStore;
@@ -54,6 +56,8 @@ export class VoiceService {
     const args = ["run", "--project", this.dir, "python", join(this.dir, "main.py"), "--hub", this.d.hubUrl()];
     if (v.device) args.push("--device", v.device);
     if (v.threshold) args.push("--threshold", String(v.threshold));
+    // пауза конца фразы: у фразы с «Крабиком» — она, у команды после сигнала — чуть дольше
+    if (v.pause) args.push("--wake-pause", String(v.pause), "--pause", String(Math.round((v.pause + 0.3) * 10) / 10));
     return { cmd: uv, args };
   }
 
@@ -67,7 +71,7 @@ export class VoiceService {
 
   status(): VoiceStatus {
     const why = this.unavailable();
-    return { enabled: !!this.d.config.config.voice?.enabled, state: this.state, ...(why ? { unavailable: why } : {}), log: this.lines.slice(-LOG_LINES), device: this.d.config.config.voice?.device ?? "" };
+    return { enabled: !!this.d.config.config.voice?.enabled, state: this.state, ...(why ? { unavailable: why } : {}), log: this.lines.slice(-LOG_LINES), device: this.d.config.config.voice?.device ?? "", pause: this.d.config.config.voice?.pause ?? DEFAULT_PAUSE };
   }
 
   /** При запуске хаба и после смены настройки. */
@@ -115,9 +119,10 @@ export class VoiceService {
   }
 
   /** Включить/выключить и микрофон (пусто — системный). */
-  set(patch: { enabled?: boolean; device?: string }): VoiceStatus {
+  set(patch: { enabled?: boolean; device?: string; pause?: number }): VoiceStatus {
     const cur = this.d.config.config.voice ?? {};
-    const next = { ...cur, ...(typeof patch.enabled === "boolean" ? { enabled: patch.enabled } : {}), ...(typeof patch.device === "string" ? { device: patch.device.trim() } : {}) };
+    const pause = typeof patch.pause === "number" && patch.pause >= 0.5 && patch.pause <= 5 ? { pause: patch.pause } : {};
+    const next = { ...cur, ...(typeof patch.enabled === "boolean" ? { enabled: patch.enabled } : {}), ...(typeof patch.device === "string" ? { device: patch.device.trim() } : {}), ...pause };
     if (!next.device) delete next.device;
     this.d.config.config.voice = next;
     this.d.config.save();

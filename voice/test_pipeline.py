@@ -72,8 +72,8 @@ class FakeHub(BaseHTTPRequestHandler):
 def main() -> None:
     silence = lambda s: np.zeros(int(16000 * s), dtype=np.float32)
     ru = lambda t: say("ru_RU-irina-medium", t)
-    # посторонняя фраза; команда одной фразой; одно слово, пауза, команда
-    audio = np.concatenate([silence(0.5), ru("Сегодня хорошая погода, пойдём гулять."), silence(1.2), ru("Крабик, открой блокнот и напиши привет."), silence(1.2), ru("Крабик."), silence(1.0), ru("Покажи экран."), silence(0.5)])
+    # посторонняя фраза; команда одной фразой; одно слово, пауза, команда; команда с паузой 1 с посередине
+    audio = np.concatenate([silence(0.5), ru("Сегодня хорошая погода, пойдём гулять."), silence(4), ru("Крабик, открой блокнот и напиши привет."), silence(4), ru("Крабик."), silence(2.0), ru("Покажи экран."), silence(4), ru("Крабик, открой телеграм"), silence(1.0), ru("и найди последнее сообщение."), silence(0.5)])
     feed = HERE / "test_feed.wav"
     with wave.open(str(feed), "wb") as w:
         w.setnchannels(1)
@@ -90,11 +90,12 @@ def main() -> None:
     print(log[-1500:])
     checks = [
         ("посторонняя фраза не запустила", not any("погода" in g.lower() for g in got) and "погода" not in log.lower()),
-        ("команда одной фразой", any(g.lower().startswith("открой блокнот") and "привет" in g.lower() for g in got)),
+        ("команда одной фразой", any("блокнот" in g.lower() and "привет" in g.lower() and "краб" not in g.lower() for g in got)),
         ("слово, пауза, команда", any("экран" in g.lower() and "краб" not in g.lower() for g in got)),
-        ("ушло ровно две команды", len(got) == 2),
+        ("пауза посреди фразы не порвала команду", any("телеграм" in g.lower() and "сообщение" in g.lower() for g in got)),
+        ("ушло ровно три команды", len(got) == 3),
         ("дождался конца хода", calls["reply"] >= 3),
-        ("ответ сказан", log.count("SAY Блокнот открыт, привет написал.") == 2),
+        ("ответ сказан", log.count("SAY Блокнот открыт, привет написал.") == 3),
         ("состояния", "STATE listening" in log and "STATE recording" in log and "STATE thinking" in log and "STATE speaking" in log),
     ]
     for name, ok in checks:

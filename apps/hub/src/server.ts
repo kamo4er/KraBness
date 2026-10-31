@@ -687,7 +687,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     if (!deps.voice) throw new HttpError(404, L("Голос недоступен", "Voice is unavailable"));
     return deps.voice.status();
   });
-  app.put<{ Body: { enabled?: boolean; device?: string } }>("/api/voice", async (req) => {
+  app.put<{ Body: { enabled?: boolean; device?: string; pause?: number } }>("/api/voice", async (req) => {
     if (!deps.voice) throw new HttpError(404, L("Голос недоступен", "Voice is unavailable"));
     const why = deps.voice.unavailable();
     if (req.body?.enabled && why) throw new HttpError(409, why);

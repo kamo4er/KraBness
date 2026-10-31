@@ -32,7 +32,7 @@ export function VoiceSettings() {
   useEffect(() => {
     if (s) setDevice(s.device);
   }, [s?.device]);
-  const set = async (patch: { enabled?: boolean; device?: string }) => {
+  const set = async (patch: { enabled?: boolean; device?: string; pause?: number }) => {
     setError(undefined);
     try {
       setS(await client.setVoice(patch));
@@ -62,6 +62,17 @@ export function VoiceSettings() {
           {t("Сохранить", "Save")}
         </button>
         <span className="muted">{t("номер или часть имени, например «ME6S»", "number or part of the name, e.g. “ME6S”")}</span>
+      </div>
+      <div className="row" style={{ alignItems: "center", gap: 8, marginTop: 8 }}>
+        <span>{t("Конец фразы — после паузы", "End of phrase — after a pause of")}</span>
+        <select className="input" style={{ width: "auto" }} value={String(s.pause)} onChange={(e) => void set({ pause: Number(e.target.value) })}>
+          {[1, 1.3, 1.5, 2, 3].map((p) => (
+            <option key={p} value={String(p)}>
+              {String(p).replace(".", ",")} {t("с", "s")}
+            </option>
+          ))}
+        </select>
+        <span className="muted">{t("режет фразу посередине — поставь больше", "cuts phrases in the middle — set it higher")}</span>
       </div>
       {error ? <p className="error">{error}</p> : null}
       {s.log.length ? (

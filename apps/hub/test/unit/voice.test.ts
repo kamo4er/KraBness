@@ -64,3 +64,26 @@ else setInterval(() => {}, 1000);`,
   const bare = new VoiceService({ config, hubUrl: () => "", dir: join(base, "nope"), command: () => ({ cmd: "x", args: [] }) });
   assert.match(bare.status().unavailable ?? "", /voice/);
 });
+
+test("голос: пауза конца фразы уходит сервису ключами запуска, мусор не сохраняется", async () => {
+  const base = mkdtempSync(join(tmpdir(), "kh-voicep-"));
+  const dir = join(base, "voice");
+  mkdirSync(dir);
+  writeFileSync(join(dir, "main.py"), "#");
+  const config = new ConfigStore(join(base, "cfg.json"), { dataDir: join(base, "data"), roots: [base] });
+  let args: string[] = [];
+  // своя команда не нужна: смотрим, что соберёт настоящий запуск через uv (если uv нет — проверяем только статус)
+  const v = new VoiceService({ config, hubUrl: () => "http://h", dir });
+  assert.equal(v.status().pause, 1.3, "по умолчанию 1,3 с");
+  v.set({ pause: 2 });
+  assert.equal(v.status().pause, 2);
+  v.set({ pause: 99 });
+  assert.equal(v.status().pause, 2, "вне 0,5–5 с — не принимается");
+  const cmd = (v as unknown as { command(): { args: string[] } | undefined }).command();
+  if (cmd) {
+    args = cmd.args;
+    assert.equal(args[args.indexOf("--wake-pause") + 1], "2");
+    assert.equal(args[args.indexOf("--pause") + 1], "2.3");
+  }
+  v.close();
+});
