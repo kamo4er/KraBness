@@ -5,7 +5,8 @@ import { limitView, resolveFileRef, type FileRef, type ClaudeLimits, type Listen
 import { client, fmtSize, useEngines, useHub, useQuickPrompts } from "../store.ts";
 import { loadChat } from "../cache.ts";
 import { getDraft, getDraftFiles, setDraft, setDraftFiles } from "../drafts.ts";
-import { speakable, toggleSpeak, useSpeaking } from "../speak.ts";
+import { sayMessage, speakable, toggleSpeak, useSpeaking } from "../speak.ts";
+import { setTalk, talkPart, useTalk } from "../talk.ts";
 import { pickFiles, pickPhotos, takePhoto, upload, type Picked } from "../files.ts";
 import { useDictation, voiceAvailable } from "../voice.ts";
 import { back, go, replace } from "../nav.ts";
@@ -53,6 +54,19 @@ export function Chat({ id }: { id: string }) {
   const [hit, setHit] = useState(0);
   const matchesRef = useRef<number[]>([]);
   const [showOld, setShowOld] = useState(false);
+  // режим «Разговор»: агент закончил ход — начало ответа звучит вслух
+  const talk = useTalk(id, info?.kind === "dispatcher");
+  const wasBusy = useRef(false);
+  useEffect(() => {
+    const nowBusy = info?.status === "busy" || info?.status === "retry";
+    if (wasBusy.current && !nowBusy && talk && view) {
+      const last = [...view.messages].reverse().find((m) => m.info.role === "assistant" && m.parts.some((p) => p.type === "text" && p.text.trim()));
+      const md = last?.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n\n") ?? "";
+      const part = talkPart(md);
+      if (last && part) sayMessage(last.info.id, part);
+    }
+    wasBusy.current = nowBusy;
+  }, [info?.status]);
   const queryKey = search?.trim().toLowerCase() ?? "";
   // новый запрос — к самому свежему совпадению
   useEffect(() => {
@@ -124,7 +138,7 @@ export function Chat({ id }: { id: string }) {
           <Btn small title="↓" disabled={!matches.length} onPress={() => goHit(hit - 1)} />
         </View>
       ) : (
-        <Header info={info} conn={state.conn} onSearch={() => setSearch("")} />
+        <Header info={info} conn={state.conn} onSearch={() => setSearch("")} talk={talk} />
       )}
       {info.engine === "claude" || state.usage[info.id] ? (
         <View style={st.limitRow}>
@@ -185,13 +199,13 @@ export function Chat({ id }: { id: string }) {
       </View>
       {view?.permissions.map((p) => <PermissionCard key={p.id} sessionId={id} req={p} />)}
       {view?.questions.map((q) => <QuestionCard key={q.id} sessionId={id} req={q} />)}
-      <Composer key={id} sessionId={id} busy={busy} slash={info.engine === "claude"} />
+      <Composer key={id} sessionId={id} busy={busy} slash={info.engine === "claude"} talk={talk} />
     </View>
     </FileRefCtx.Provider>
   );
 }
 
-function Header({ info, conn, onSearch }: { info: SessionInfo; conn: ReturnType<typeof useHub>["conn"]; onSearch: () => void }) {
+function Header({ info, conn, onSearch, talk }: { info: SessionInfo; conn: ReturnType<typeof useHub>["conn"]; onSearch: () => void; talk: boolean }) {
   const engines = useEngines();
   const models = engines?.find((e) => e.id === info.engine)?.models ?? [];
   const key = (m: { providerId: string; modelId: string }) => `${m.providerId}/${m.modelId}`;
@@ -231,6 +245,12 @@ function Header({ info, conn, onSearch }: { info: SessionInfo; conn: ReturnType<
                 icon: "✅",
                 hint: t("после хода агента — тесты и сборка, ошибки уходят агенту", "tests and build after each agent turn, failures go back to the agent"),
                 onPress: () => void checksMenu(info.id, !!info.autoCheck).catch(fail),
+              },
+              {
+                text: talk ? t("Разговор: вкл", "Talk mode: on") : t("Разговор: выкл", "Talk mode: off"),
+                icon: "🗣",
+                hint: t("отпустил микрофон — сообщение ушло, ответ звучит вслух", "release the mic — the message is sent, the answer is read aloud"),
+                onPress: () => setTalk(info.id, !talk),
               },
               {
                 text: t("Сжать контекст", "Compact the context"),
@@ -379,7 +399,7 @@ interface Pending extends Picked {
   error?: string;
 }
 
-function Composer({ sessionId, busy, slash }: { sessionId: string; busy: boolean; slash: boolean }) {
+function Composer({ sessionId, busy, slash, talk }: { sessionId: string; busy: boolean; slash: boolean; talk: boolean }) {
   const [text, setText] = useState(() => getDraft(sessionId));
   const [files, setFiles] = useState<Pending[]>(() => getDraftFiles<Pending>(sessionId));
   useEffect(() => setDraft(sessionId, text), [sessionId, text]);
@@ -389,7 +409,8 @@ function Composer({ sessionId, busy, slash }: { sessionId: string; busy: boolean
   useEffect(() => () => setDraftFiles(sessionId, filesRef.current.filter((f) => f.fileId)), [sessionId]);
   const [sending, setSending] = useState(false);
   const quick = useQuickPrompts();
-  const dictation = useDictation(text, setText);
+  // «Разговор»: отпустил кнопку — надиктованное уходит само
+  const dictation = useDictation(text, setText, talk ? (said) => void send(said) : undefined);
   const [canVoice] = useState(voiceAvailable);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   useEffect(() => {
@@ -503,6 +524,7 @@ function Composer({ sessionId, busy, slash }: { sessionId: string; busy: boolean
           ))}
         </ScrollView>
       ) : null}
+      {talk && canVoice ? <Text style={st.talkHint}>🗣 {t("Разговор: держи 🎤 и говори — отпустишь, и сообщение уйдёт само, а ответ прочитаю вслух", "Talk mode: hold 🎤 and speak — release and the message is sent, the answer is read aloud")}</Text> : null}
       <View style={st.composer}>
         {/* «/» нужна, только чтобы начать команду — при наборе текста место отдаём полю */}
         {slash && commands.length && !text ? <Btn title="/" style={st.iconBtn} onPress={() => setText("/")} /> : null}
@@ -554,6 +576,7 @@ const st = StyleSheet.create({
   bubble: { backgroundColor: C.accent2, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14, borderBottomRightRadius: 4, maxWidth: "88%", gap: 6 },
   assistant: { gap: 8 },
   speak: { alignSelf: "flex-start", paddingVertical: 2 },
+  talkHint: { color: C.muted, fontSize: 12, paddingHorizontal: 12, paddingTop: 4 },
   msgActions: { flexDirection: "row", alignItems: "center", gap: 18 },
   error: { color: C.err, backgroundColor: "#2a1518", padding: 10, borderRadius: 8 },
   working: { color: C.warn },

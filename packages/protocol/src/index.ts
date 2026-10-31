@@ -80,6 +80,8 @@ export interface SessionInfo {
   autoCheck?: boolean;
   /** сессия — шаг задачи (исполнитель или ревью): в общем списке не показывается, живёт на странице задачи */
   taskId?: string;
+  /** особая сессия: Диспетчер — помощник, который управляет остальными сессиями и ПК (клиенты закрепляют её сверху) */
+  kind?: SessionKind;
   /** уровень рассуждений (из ModelInfo.efforts); нет — по умолчанию модели. Применяется со следующего сообщения */
   effort?: string;
 }
@@ -106,6 +108,9 @@ export interface MessageInfo {
   /** пересказ разговора после сжатия контекста — клиенты показывают его свёрнутым */
   summary?: boolean;
 }
+
+/** Особые сессии. dispatcher — Диспетчер (apps/hub/src/dispatcher.ts). */
+export type SessionKind = "dispatcher";
 
 export type ToolStatus = "pending" | "running" | "completed" | "error";
 
@@ -263,6 +268,8 @@ export interface CreateSessionRequest {
   groupId?: string;
   /** шаг задачи (ставит хаб) */
   taskId?: string;
+  /** особая сессия (ставит хаб, из API не принимается) */
+  kind?: SessionKind;
   /** уровень рассуждений; нет — по умолчанию модели */
   effort?: string;
 }
@@ -777,4 +784,17 @@ export interface SessionBotInfo {
   chats: Array<{ id: number; name: string }>;
   /** последняя ошибка связи с Telegram */
   error?: string;
+}
+export * from "./speech.ts";
+
+/** Голос на ПК (apps/hub/src/voice.ts, voice/main.py): слово-активатор → Whisper → Диспетчер → ответ вслух. */
+export interface VoiceStatus {
+  enabled: boolean;
+  state: "off" | "starting" | "loading" | "listening" | "recording" | "thinking" | "speaking" | "restarting";
+  /** почему нельзя включить */
+  unavailable?: string;
+  /** хвост лога сервиса */
+  log: string[];
+  /** микрофон (номер или часть имени); пусто — системный */
+  device: string;
 }

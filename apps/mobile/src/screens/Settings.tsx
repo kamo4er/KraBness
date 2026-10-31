@@ -1,7 +1,7 @@
 // Настройки: список разделов, по нажатию — страница раздела.
 import { useEffect, useState } from "react";
 import { Linking, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, ToastAndroid, View } from "react-native";
-import type { HubInfo, TelegramProxy, TelegramStatus } from "@kamharn/client";
+import type { HubInfo, TelegramProxy, TelegramStatus, VoiceStatus } from "@kamharn/client";
 import { client, saveQuickPrompts, unpair, useConn, useHub, useQuickPrompts } from "../store.ts";
 import { UsagePage } from "../Usage.tsx";
 import { back, go } from "../nav.ts";
@@ -28,7 +28,7 @@ const SECTIONS = (): { id: SettingsSection; icon: string; title: string; hint: s
   { id: "agents", icon: "🤖", title: t("Агенты", "Agents"), hint: t("Движки, модели и провайдеры, MCP, скиллы", "Engines, models and providers, MCP, skills") },
   { id: "connect", icon: "🔗", title: t("Подключение", "Connection"), hint: t("Связь с хабом, свой сервер, отключение", "Hub connection, your own server, disconnecting") },
   { id: "notify", icon: "🔔", title: t("Уведомления", "Notifications"), hint: t("Способ уведомлений, связь в фоне, Telegram", "How to notify, staying connected, Telegram") },
-  { id: "computer", icon: "🖥️", title: t("Компьютер", "Computer"), hint: t("Разбудить, усыпить, экран, перезапуск хаба", "Wake, sleep, screen, restarting the hub") },
+  { id: "computer", icon: "🖥️", title: t("Компьютер", "Computer"), hint: t("Разбудить, усыпить, экран, голос, перезапуск хаба", "Wake, sleep, screen, voice, restarting the hub") },
   { id: "usage", icon: "📊", title: t("Расход токенов", "Token usage"), hint: t("День, неделя, месяц или свой период", "Day, week, month or your own period") },
   { id: "updates", icon: "⬆️", title: t("Обновления", "Updates"), hint: t("KraBness и это приложение", "KraBness and this app") },
 ];
@@ -176,6 +176,7 @@ export function Settings({ section }: { section?: SettingsSection }) {
               ) : null}
               <WakeSetupBox />
             </View>
+            <VoiceBox />
 
             <Text style={S.h3}>{t("Хаб", "Hub")}</Text>
             <View style={st.box}>
@@ -481,3 +482,41 @@ function TelegramProxyForm({ status, onSaved }: { status: TelegramStatus; onSave
 const st2 = StyleSheet.create({
   proxy: { borderTopWidth: 1, borderTopColor: C.line, marginTop: 4, paddingTop: 10, gap: 8 },
 });
+
+/** Голос на ПК: «Крабик, …» → Диспетчер → ответ в колонки ПК. Микрофон и журнал — в веб-настройках. */
+function VoiceBox() {
+  const [s, setS] = useState<VoiceStatus>();
+  useEffect(() => {
+    let alive = true;
+    const load = () => void client?.voice().then((v) => alive && setS(v), () => {});
+    load();
+    const timer = setInterval(load, 3000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
+  if (!s) return null;
+  const toggle = () =>
+    void client
+      ?.setVoice({ enabled: !s.enabled })
+      .then(setS, (e: Error) => dialog(t("Не получилось", "Failed"), e.message));
+  return (
+    <>
+      <Text style={S.h3}>{t("Голос на ПК", "Voice on the PC")}</Text>
+      <View style={st.box}>
+        <Text style={S.muted}>
+          {t("Скажи у ПК «Крабик, …» и команду — её выполнит Диспетчер, ответ прозвучит в колонках.", "Say “Krabik, …” and the command at the PC — the Dispatcher does it, the answer plays through the speakers.")}
+        </Text>
+        {s.unavailable ? <Text style={S.muted}>{s.unavailable}</Text> : null}
+        <Btn
+          kind={s.enabled ? "default" : "primary"}
+          disabled={!!s.unavailable && !s.enabled}
+          title={s.enabled ? t("Выключить", "Turn off") : t("Включить", "Turn on")}
+          onPress={toggle}
+        />
+        {s.enabled ? <Text style={S.muted}>{t("Сейчас", "Now")}: {s.state}</Text> : null}
+      </View>
+    </>
+  );
+}

@@ -33,6 +33,8 @@ import { ClaudeLogin } from "./claudeauth.ts";
 import { RemoteTunnel } from "./remote.ts";
 import { AutoCheck } from "./checks.ts";
 import { Orchestrator } from "./orchestrator.ts";
+import { computerCommand, computerExtras, Dispatcher } from "./dispatcher.ts";
+import { VoiceService, type VoiceDeps } from "./voice.ts";
 import { tunnelSockets } from "./auth.ts";
 import { buildServer } from "./server.ts";
 import { L } from "./lang.ts";
@@ -71,6 +73,8 @@ export interface HubOptions {
   configPath?: string;
   overrides?: Partial<HubConfig>;
   log?: (m: string) => void;
+  /** голос на ПК: своя папка и команда запуска (тесты) */
+  voice?: Pick<VoiceDeps, "dir" | "command">;
   /** папка скиллов (по умолчанию ~/.claude/skills; тесты дают временную, null — без скиллов) */
   skillsDir?: string | null;
   /** хаб под сторожем: перезапуск = корректно выйти, сторож поднимет заново */
@@ -110,6 +114,8 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   autoCheck = new AutoCheck({ sessions, config, notify: (sid, m) => notifier.notify(sid, m), log });
   // задачи: конвейер над сессиями (исполнитель → проверки → ревью → отчёт)
   const tasks = new Orchestrator({ sessions, db, config, autoCheck, notify: (sid, m) => notifier.notify(sid, m), log });
+  const voice = new VoiceService({ config, hubUrl: () => localBase, log, ...opts.voice });
+  const dispatcher = new Dispatcher({ sessions, config, tasks, files });
   // уведомления в свой Telegram-бот (если настроен): кнопки подтверждения и ответ агенту реплаем
   const telegram = new TelegramBot(
     config,
@@ -145,6 +151,12 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
         apiKey: () => config.config.engines.claude.apiKey,
         ...(cfg.engines.claude.args?.length ? { extraArgs: cfg.engines.claude.args } : {}),
         extraMcp: () => mcpServers.forClaude(),
+        // Диспетчеру — управление ПК (Windows-MCP), остальным ничего
+        sessionExtras: (esid) => {
+          if (!dispatcher.isScope(esid)) return undefined;
+          const uvx = computerCommand(config);
+          return uvx ? computerExtras(uvx) : undefined;
+        },
         onMcpStatus: (list) => mcpServers.noteClaudeInit(list),
         dataDir: cfg.dataDir,
         mcpBaseUrl: () => `${localBase}/mcp/${mcpSecret}`,
@@ -190,6 +202,8 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
     sessions, auth, config, db, files, push, presence, previews, terminal, telegram, sessionBots, version: VERSION,
     autoCheck,
     tasks,
+    dispatcher,
+    voice,
     notices: (cb) => notifier.subscribe(cb),
     mcpServers,
     skills: opts.skillsDir === null ? undefined : new Skills(opts.skillsDir),
@@ -219,6 +233,7 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
     files,
     claude,
     claudeSessionDir: (esid) => sessions.directoryOf("claude", esid),
+    dispatcher,
   });
 
   // Слушаем только перечисленные адреса (localhost + Tailscale), не 0.0.0.0.
@@ -306,6 +321,7 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   tasks.start();
   telegram.start();
   sessionBots.start();
+  voice.start();
 
   if (cfg.engines.opencode.enabled) {
     const oc = new OpencodeEngine({
@@ -371,6 +387,7 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
       terminal.close();
       telegram.close();
       sessionBots.close();
+      voice.close();
       await previews.close();
       // Клиенты держат WebSocket постоянно, а server.close() ждёт закрытия всех соединений —
       // без принудительного разрыва хаб висел на выключении вечно (и сторож не мог его перезапустить).

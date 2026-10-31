@@ -14,13 +14,18 @@ export function voiceAvailable(): boolean {
   }
 }
 
-/** Диктовка в поле: setText получает полный текст поля (набранное + надиктованное). */
-export function useDictation(text: string, setText: (t: string) => void) {
+/** Диктовка в поле: setText получает полный текст поля (набранное + надиктованное). onDone — кнопку отпустили и распознавание закончилось (режим «Разговор» отправляет сразу). */
+export function useDictation(text: string, setText: (t: string) => void, onDone?: (text: string) => void) {
   const [listening, setListening] = useState(false);
   const base = useRef("");
   const last = useRef("");
   /** палец на кнопке: распознаватель Android сам останавливается на паузе — тогда запускаем снова */
   const holding = useRef(false);
+  /** кнопку отпустили, ждём конца распознавания — тогда onDone */
+  const released = useRef(false);
+  const startText = useRef("");
+  const done = useRef(onDone);
+  done.current = onDone;
 
   const begin = () => ExpoSpeechRecognitionModule.start({ lang: locale(), interimResults: true, addsPunctuation: true, continuous: false });
 
@@ -32,6 +37,11 @@ export function useDictation(text: string, setText: (t: string) => void) {
       return;
     }
     setListening(false);
+    if (released.current) {
+      released.current = false;
+      // что-то надиктовали (а не только то, что было набрано до кнопки)
+      if (last.current.trim() && last.current !== startText.current) done.current?.(last.current.trim());
+    }
   });
   useSpeechRecognitionEvent("result", (e) => {
     const said = e.results[0]?.transcript?.trim() ?? "";
@@ -44,6 +54,7 @@ export function useDictation(text: string, setText: (t: string) => void) {
     // тишина и ручная остановка — не ошибка для пользователя
     if (e.error === "no-speech" || e.error === "aborted") return;
     holding.current = false;
+    released.current = false;
     setListening(false);
     ToastAndroid.show(`${t("Распознавание", "Speech recognition")}: ${e.message || e.error}`, ToastAndroid.LONG);
   });
@@ -59,6 +70,7 @@ export function useDictation(text: string, setText: (t: string) => void) {
     // пока висел запрос разрешения, палец могли отпустить — не начинаем запись «в пустоту»
     if (!holding.current) return ToastAndroid.show(t("Готово — теперь удерживай кнопку и говори", "Done — now hold the button and speak"), ToastAndroid.SHORT);
     base.current = text;
+    startText.current = text;
     last.current = text;
     begin();
   }
@@ -67,6 +79,7 @@ export function useDictation(text: string, setText: (t: string) => void) {
   function release() {
     if (!holding.current) return;
     holding.current = false;
+    released.current = true;
     ExpoSpeechRecognitionModule.stop();
   }
 

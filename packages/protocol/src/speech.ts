@@ -32,3 +32,13 @@ export function speakableText(md: string): string {
     .join("\n");
   return s.length > SPEECH_MAX ? s.slice(0, s.lastIndexOf(" ", SPEECH_MAX)) + "…" : s;
 }
+
+/** Что прочитать вслух в режиме «Разговор»: первый абзац ответа (у Диспетчера это итог); длинный — до конца предложения в пределах ~400 знаков. */
+export function talkPart(md: string): string {
+  const paragraphs = md.replace(/```[\s\S]*?(```|$)/g, "\n\n").split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const first = paragraphs[0] ?? "";
+  if (first.length <= 400) return first;
+  const cut = first.slice(0, 400);
+  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+  return end >= 20 ? cut.slice(0, end + 1) : cut;
+}

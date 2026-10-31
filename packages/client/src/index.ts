@@ -6,6 +6,7 @@ import {
   emptyView,
   upsertPart,
   type AppRelease,
+  type VoiceStatus,
   type ClaudeLimits,
   type UsageReport,
   type SessionBotInfo,
@@ -51,7 +52,7 @@ import {
 } from "@kamharn/protocol";
 
 export * from "@kamharn/protocol";
-export { speakableText, SPEECH_MAX } from "./speech.ts";
+export { speakableText, SPEECH_MAX, talkPart } from "@kamharn/protocol";
 export { splitArgs, joinArgs, parsePairs } from "./args.ts";
 export { ago, baseName, fmtTokens, fmtCost, localDay } from "./format.ts";
 export { parseFileRef, resolveFileRef, type FileRef } from "./paths.ts";
@@ -423,6 +424,8 @@ export class HubClient {
     if (!r.ok) throw new ApiError(r.status, `${r.status} ${r.statusText}`);
     return r.text();
   }
+  /** Сессия Диспетчера: есть — вернёт её, нет — хаб создаст. */
+  ensureDispatcher = () => this.api<SessionInfo>("POST", "/api/dispatcher");
   git = (id: string) => this.api<GitInfo>("GET", `/api/sessions/${id}/git`);
   /** Продолжить сессию на бесплатной модели (opencode) с выжимкой контекста. */
   /** model — модель opencode (без неё — по умолчанию) */
@@ -554,6 +557,9 @@ export class HubClient {
   // via — по какому адресу клиент ходит в хаб: через NAS/свой домен хаб даст общий адрес превью, иначе — Tailscale
   openPreview = (port: number, session?: string) => this.api<{ url: string }>("POST", "/api/preview", { port, via: this.baseUrl, ...(session ? { session } : {}) });
   sleepPc = (delaySec = 20) => this.api<{ ok: true; delaySec: number }>("POST", "/api/hub/sleep", { delaySec });
+  /** голос на ПК: «Крабик, …» → Диспетчер → ответ вслух */
+  voice = () => this.api<VoiceStatus>("GET", "/api/voice");
+  setVoice = (patch: { enabled?: boolean; device?: string }) => this.api<VoiceStatus>("PUT", "/api/voice", patch);
   wakeConfig = () => this.api<WakeRuntime>("GET", "/api/wake");
   // ---------- «Новая сессия»: включённые движки и выбор по умолчанию ----------
   newSessionPrefs = () => this.api<NewSessionPrefs>("GET", "/api/new-session");

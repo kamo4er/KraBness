@@ -9,6 +9,7 @@ import { EngineSettings } from "./EngineSettings.tsx";
 import { LangSwitch } from "./LangSwitch.tsx";
 import { UpdateSettings } from "./Updates.tsx";
 import { UsagePage } from "./Usage.tsx";
+import { VoiceSettings } from "./VoiceSettings.tsx";
 
 export type SettingsSection = "general" | "agents" | "connect" | "notify" | "computer" | "usage" | "updates";
 
@@ -18,7 +19,7 @@ export const SECTIONS = (): { id: SettingsSection; icon: string; title: string; 
   { id: "agents", icon: "🤖", title: t("Агенты", "Agents"), hint: t("Движки, модели и провайдеры, MCP, скиллы", "Engines, models and providers, MCP, skills") },
   { id: "connect", icon: "🔗", title: t("Подключение", "Connection"), hint: t("Устройства, адреса хаба, свой сервер", "Devices, hub addresses, your own server") },
   { id: "notify", icon: "🔔", title: t("Уведомления", "Notifications"), hint: t("Telegram-бот", "Telegram bot") },
-  { id: "computer", icon: "🖥️", title: t("Компьютер", "Computer"), hint: t("Пробуждение ПК, перезапуск хаба, экран", "Waking the PC, restarting the hub, screen") },
+  { id: "computer", icon: "🖥️", title: t("Компьютер", "Computer"), hint: t("Пробуждение ПК, голос, перезапуск хаба", "Waking the PC, voice, restarting the hub") },
   { id: "usage", icon: "📊", title: t("Расход токенов", "Token usage"), hint: t("За день, неделю, месяц или свой период; по моделям и сессиям", "By day, week, month or your own period; by model and session") },
   { id: "updates", icon: "⬆️", title: t("Обновления", "Updates"), hint: t("KraBness и Android-приложение", "KraBness and the Android app") },
 ];
@@ -109,6 +110,7 @@ export function Settings({ section }: { section?: SettingsSection }) {
         ) : sec.id === "computer" ? (
           <>
             <WakeSettings />
+            <VoiceSettings />
             <HubSection />
           </>
         ) : (

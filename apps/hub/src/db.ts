@@ -89,6 +89,7 @@ export class Db {
     if (!cols.includes("auto_check")) this.db.exec(`ALTER TABLE sessions ADD COLUMN auto_check INTEGER NOT NULL DEFAULT 0`);
     if (!cols.includes("effort")) this.db.exec(`ALTER TABLE sessions ADD COLUMN effort TEXT`);
     if (!cols.includes("task_id")) this.db.exec(`ALTER TABLE sessions ADD COLUMN task_id TEXT`);
+    if (!cols.includes("kind")) this.db.exec(`ALTER TABLE sessions ADD COLUMN kind TEXT`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, icon TEXT, prompt TEXT, sort INTEGER NOT NULL DEFAULT 0)`);
     const gcols = (this.db.prepare(`PRAGMA table_info(groups)`).all() as Row[]).map((c) => String(c.name));
     if (!gcols.includes("no_user_rules")) this.db.exec(`ALTER TABLE groups ADD COLUMN no_user_rules INTEGER NOT NULL DEFAULT 0`);
@@ -148,10 +149,10 @@ export class Db {
   insertSession(s: SessionRow): void {
     this.db
       .prepare(
-        `INSERT INTO sessions (id, engine, engine_session_id, directory, title, model_json, permission_mode, status, created_at, updated_at, last_seq, worktree_json, group_id, task_id, effort)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sessions (id, engine, engine_session_id, directory, title, model_json, permission_mode, status, created_at, updated_at, last_seq, worktree_json, group_id, task_id, effort, kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(s.id, s.engine, s.engineSessionId, s.directory, s.title, JSON.stringify(s.model), s.permissionMode, s.status, s.createdAt, s.updatedAt, s.lastSeq, s.worktree ? JSON.stringify(s.worktree) : null, s.groupId || null, s.taskId || null, s.effort || null);
+      .run(s.id, s.engine, s.engineSessionId, s.directory, s.title, JSON.stringify(s.model), s.permissionMode, s.status, s.createdAt, s.updatedAt, s.lastSeq, s.worktree ? JSON.stringify(s.worktree) : null, s.groupId || null, s.taskId || null, s.effort || null, s.kind || null);
   }
 
   updateSession(id: string, patch: Partial<Pick<SessionInfo, "title" | "status" | "model" | "permissionMode" | "updatedAt" | "resumeAt" | "groupId" | "autoCheck" | "effort">>): void {
@@ -343,6 +344,7 @@ function toSession(r: Row): SessionRow {
     ...(r.worktree_json ? { worktree: JSON.parse(String(r.worktree_json)) as WorktreeInfo } : {}),
     ...(r.group_id ? { groupId: String(r.group_id) } : {}),
     ...(r.task_id ? { taskId: String(r.task_id) } : {}),
+    ...(r.kind === "dispatcher" ? { kind: "dispatcher" as const } : {}),
     ...(Number(r.auto_check) ? { autoCheck: true } : {}),
     ...(r.effort ? { effort: String(r.effort) } : {}),
   };

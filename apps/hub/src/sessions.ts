@@ -36,6 +36,7 @@ import { gitInfo } from "./project.ts";
 import { createWorktree, discardWorktree, GitError, mergeWorktree, removeWorktree, worktreeStatus } from "./worktree.ts";
 import { dayOf, emptyTotals, totalsOf, type UsageRecord } from "./usage.ts";
 import { L } from "./lang.ts";
+import { computerCommand, dispatcherPrompt } from "./dispatcher.ts";
 
 /** Что клиенты KraBness умеют показывать — агенту, чтобы пользовался (на языке хаба, как и прочие промпты агенту). */
 export const artifactsHint = (): string =>
@@ -87,6 +88,11 @@ export class SessionManager extends EventEmitter<HubEvents> {
     super();
     this.claudeProjectsDir = opts.claudeProjectsDir ?? join(homedir(), ".claude", "projects");
     this.setMaxListeners(0);
+  }
+
+  /** Сессия хаба по id сессии движка (MCP узнаёт по нему Диспетчера). */
+  idByEngine(engine: EngineId, engineSessionId: string): string | undefined {
+    return this.byEngineSession.get(key(engine, engineSessionId));
   }
 
   /** Рабочая папка сессии по id сессии движка (для MCP-инструментов). */
@@ -197,6 +203,7 @@ export class SessionManager extends EventEmitter<HubEvents> {
       ...(worktree ? { worktree } : {}),
       ...(req.groupId && this.db.getGroup(req.groupId) ? { groupId: req.groupId } : {}),
       ...(req.taskId ? { taskId: req.taskId } : {}),
+      ...(req.kind === "dispatcher" ? { kind: "dispatcher" as const } : {}),
       ...(cleanEffort(req.effort) ? { effort: cleanEffort(req.effort) } : {}),
     };
     this.db.insertSession(row);
@@ -221,7 +228,7 @@ export class SessionManager extends EventEmitter<HubEvents> {
   private launchOpts(s: SessionInfo): { system?: string; effort?: string; noUserRules?: boolean } {
     const g = s.groupId ? this.db.getGroup(s.groupId) : undefined;
     // подсказка про то, что клиенты умеют показывать, — перед промптом группы
-    const system = [this.config.config.artifactsHint === false ? "" : artifactsHint(), g?.prompt ?? ""].filter(Boolean).join("\n\n");
+    const system = [s.kind === "dispatcher" ? dispatcherPrompt(!!computerCommand(this.config)) : "", this.config.config.artifactsHint === false ? "" : artifactsHint(), g?.prompt ?? ""].filter(Boolean).join("\n\n");
     return { ...(system ? { system } : {}), ...(g?.noUserRules ? { noUserRules: true } : {}), ...(s.effort ? { effort: s.effort } : {}) };
   }
 

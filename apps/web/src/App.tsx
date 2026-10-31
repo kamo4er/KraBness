@@ -49,8 +49,9 @@ export function App() {
           </div>
         )}
         <UpdateBanner />
+        <DispatcherLink activeId={route.page === "session" ? route.id : undefined} />
         <TasksLink active={route.page === "tasks" || route.page === "task"} />
-        <SessionList sessions={state.sessions.filter((s) => !s.taskId)} groups={state.groups} activeId={route.page === "session" || route.page === "project" ? route.id : undefined} />
+        <SessionList sessions={state.sessions.filter((s) => !s.taskId && s.kind !== "dispatcher")} groups={state.groups} activeId={route.page === "session" || route.page === "project" ? route.id : undefined} />
       </aside>
       <main className="main">
         {route.page === "session" && <Chat key={route.id} id={route.id} />}
@@ -77,6 +78,31 @@ export function App() {
 const DRAG = "text/kamharn-session";
 
 /** Сессии по группам: сворачивание, перетаскивание сессий между группами, «+» — новая сессия в группе. */
+/** Диспетчер — закреплён над списком; нет ещё — та же кнопка его создаёт. */
+function DispatcherLink({ activeId }: { activeId?: string }) {
+  const { sessions } = useHub();
+  const [busy, setBusy] = useState(false);
+  const d = sessions.find((s) => s.kind === "dispatcher");
+  const open = async () => {
+    if (d) return go({ page: "session", id: d.id });
+    setBusy(true);
+    try {
+      const s = await client.ensureDispatcher();
+      go({ page: "session", id: s.id });
+    } catch (e) {
+      alert((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button className={`taskslink ${d && activeId === d.id ? "taskslink--on" : ""}`} onClick={() => void open()} disabled={busy} data-dispatcher>
+      <span>🦀 {t("Диспетчер", "Dispatcher")}</span>
+      <span className="muted">{busy ? t("создаю…", "creating…") : !d ? t("создать", "create") : d.status === "busy" || d.status === "retry" ? <span className="spinner" /> : ""}</span>
+    </button>
+  );
+}
+
 /** Кнопка «Задачи» с числом тех, что ждут решения. */
 function TasksLink({ active }: { active: boolean }) {
   const { tasks } = useHub();

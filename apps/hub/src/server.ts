@@ -60,12 +60,20 @@ import type { ClaudeLogin } from "./claudeauth.ts";
 import { checkPublicUrl, probeHub, type RemoteTunnel } from "./remote.ts";
 import type { AutoCheck } from "./checks.ts";
 import type { Orchestrator } from "./orchestrator.ts";
+import { lastAssistantText } from "./orchestrator.ts";
+import { speakableText, talkPart } from "@kamharn/protocol";
+import type { Dispatcher } from "./dispatcher.ts";
+import type { VoiceService } from "./voice.ts";
 
 export interface ServerDeps {
   /** автопроверка: команды проекта и прогон после хода агента */
   autoCheck?: AutoCheck;
   /** задачи: конвейер над сессиями */
   tasks?: Orchestrator;
+  /** Диспетчер: особая сессия-помощник */
+  dispatcher?: Dispatcher;
+  /** голос на ПК */
+  voice?: VoiceService;
   /** боты сессий в Telegram */
   sessionBots?: SessionBots;
   /** отправка пушей (FCM); undefined — не настроено */
@@ -673,8 +681,26 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   // ---------- сессии ----------
 
+  // Диспетчер: есть ли и создать (его сессия обычная, только с инструментами управления харнессом)
+  // голос на ПК: статус, вкл/выкл, микрофон
+  app.get("/api/voice", async () => {
+    if (!deps.voice) throw new HttpError(404, L("Голос недоступен", "Voice is unavailable"));
+    return deps.voice.status();
+  });
+  app.put<{ Body: { enabled?: boolean; device?: string } }>("/api/voice", async (req) => {
+    if (!deps.voice) throw new HttpError(404, L("Голос недоступен", "Voice is unavailable"));
+    const why = deps.voice.unavailable();
+    if (req.body?.enabled && why) throw new HttpError(409, why);
+    return deps.voice.set(req.body ?? {});
+  });
+  app.get("/api/dispatcher", async () => ({ session: deps.dispatcher?.session() ?? null }));
+  app.post("/api/dispatcher", async () => {
+    if (!deps.dispatcher) throw new HttpError(404, L("Диспетчер недоступен", "The Dispatcher is unavailable"));
+    return deps.dispatcher.ensure();
+  });
   app.get("/api/sessions", async () => sessions.list());
-  app.post<{ Body: CreateSessionRequest }>("/api/sessions", async (req) => sessions.create(req.body));
+  // kind ставит только хаб (Диспетчер получает инструменты управления): из API не принимаем
+  app.post<{ Body: CreateSessionRequest }>("/api/sessions", async (req) => sessions.create({ ...req.body, kind: undefined }));
   app.get<{ Params: { id: string } }>("/api/sessions/:id", async (req) => {
     const { engineSessionId: _, ...info } = sessions.get(req.params.id);
     return info;
@@ -689,6 +715,12 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   app.get<{ Params: { id: string }; Querystring: { after?: string } }>("/api/sessions/:id/events", async (req) =>
     sessions.eventsAfter(req.params.id, Number(req.query.after ?? 0)),
   );
+  // голос на ПК (voice/main.py): статус сессии и что прочитать вслух из ответа агента после события after
+  app.get<{ Params: { id: string }; Querystring: { after?: string } }>("/api/sessions/:id/reply", async (req) => {
+    const s = sessions.get(req.params.id);
+    const text = lastAssistantText(sessions.eventsAfter(s.id, Number(req.query.after ?? 0)));
+    return { status: s.status, lastSeq: s.lastSeq, text, speak: text ? speakableText(talkPart(text)) : "" };
+  });
   app.post<{ Params: { id: string }; Body: PromptRequest }>("/api/sessions/:id/prompt", async (req) => {
     await sessions.prompt(req.params.id, req.body.text ?? "", req.body.fileIds ?? []);
     return { ok: true };

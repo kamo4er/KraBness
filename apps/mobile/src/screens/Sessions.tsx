@@ -72,7 +72,7 @@ export function Sessions() {
           <WakePanel hint={t("ПК не отвечает. Может, он спит?", "The PC doesn't answer. Maybe it's asleep?")} />
         </View>
       ) : null}
-      <Grouped sessions={state.sessions.filter((x) => !x.taskId)} groups={state.groups} empty={state.conn === "online" ? t("Сессий пока нет. Нажми «+ Новая».", "No sessions yet. Tap “+ New”.") : t("Загрузка…", "Loading…")} />
+      <Grouped sessions={state.sessions.filter((x) => !x.taskId && x.kind !== "dispatcher")} dispatcher={state.sessions.find((x) => x.kind === "dispatcher")} groups={state.groups} empty={state.conn === "online" ? t("Сессий пока нет. Нажми «+ Новая».", "No sessions yet. Tap “+ New”.") : t("Загрузка…", "Loading…")} />
     </View>
   );
 }
@@ -89,7 +89,7 @@ function TasksBtn() {
 }
 
 /** Секции по группам (свёрнутые — без сессий) и «Без группы» в конце. */
-function Grouped({ sessions, groups, empty }: { sessions: SessionInfo[]; groups: SessionGroup[]; empty: string }) {
+function Grouped({ sessions, dispatcher, groups, empty }: { sessions: SessionInfo[]; dispatcher?: SessionInfo; groups: SessionGroup[]; empty: string }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => recall("groups.collapsed") ?? {});
   const [moving, setMoving] = useState<SessionInfo>();
   const toggle = (key: string) => {
@@ -125,6 +125,7 @@ function Grouped({ sessions, groups, empty }: { sessions: SessionInfo[]; groups:
         renderSectionHeader={({ section }) =>
           groups.length ? <GroupHead group={section.group} count={section.items.length} busy={section.items.some((s) => s.status === "busy")} collapsed={!!collapsed[section.key]} onToggle={() => toggle(section.key)} /> : null
         }
+        ListHeaderComponent={<DispatcherRow s={dispatcher} />}
         ListEmptyComponent={<Text style={[S.muted, st.empty]}>{empty}</Text>}
         ListFooterComponent={
           <Pressable onPress={() => go({ page: "group", id: "new" })} style={st.addGroup}>
@@ -170,6 +171,32 @@ function GroupHead({ group, count, busy, collapsed, onToggle }: { group?: Sessio
   );
 }
 
+/** Диспетчер — закреплён над списком; нет ещё — нажатие его создаёт. */
+function DispatcherRow({ s }: { s?: SessionInfo }) {
+  const [busy, setBusy] = useState(false);
+  const open = async () => {
+    if (s) return go({ page: "session", id: s.id });
+    setBusy(true);
+    try {
+      const d = await client!.ensureDispatcher();
+      go({ page: "session", id: d.id });
+    } catch (e) {
+      dialog(t("Не получилось", "Failed"), (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const working = s?.status === "busy" || s?.status === "retry";
+  return (
+    <Pressable style={({ pressed }) => [st.row, st.dispatcher, pressed && { backgroundColor: C.bg2 }]} onPress={() => void open()} disabled={busy}>
+      <View style={st.line}>
+        <Text style={st.title}>🦀 {t("Диспетчер", "Dispatcher")}</Text>
+        <Text style={working ? st.busy : S.muted}>{busy ? t("создаю…", "creating…") : !s ? t("создать", "create") : working ? `● ${t("работает", "running")}` : ""}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
 function Row({ s, onLongPress }: { s: SessionInfo; onLongPress: () => void }) {
   const busy = s.status === "busy" || s.status === "retry";
   return (
@@ -196,6 +223,7 @@ function Row({ s, onLongPress }: { s: SessionInfo; onLongPress: () => void }) {
 const st = StyleSheet.create({
   wake: { padding: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line },
   row: { paddingHorizontal: 16, paddingVertical: 12, gap: 6 },
+  dispatcher: { borderBottomWidth: 1, borderBottomColor: C.line },
   line: { flexDirection: "row", alignItems: "center", gap: 8 },
   title: { color: C.text, fontSize: 16, fontWeight: "600", flex: 1 },
   busy: { color: C.warn, fontSize: 12 },

@@ -19,6 +19,8 @@ export interface ClaudeOptions {
   mcpBaseUrl: () => string;
   /** свои MCP-серверы KamHarn (mcpServers для --mcp-config), читается при каждом запуске процесса */
   extraMcp?: () => Record<string, unknown>;
+  /** дополнения для конкретной сессии (Диспетчеру — управление ПК): свои MCP-серверы и инструменты, разрешённые без вопросов */
+  sessionExtras?: (engineSessionId: string) => { mcp?: Record<string, unknown>; allowedTools?: string[] } | undefined;
   /** состояние MCP-серверов из system/init */
   onMcpStatus?: (servers: unknown) => void;
   /** подключать ли MCP-серверы из пользовательских настроек Claude */
@@ -311,6 +313,8 @@ export class ClaudeEngine implements Engine {
       "--mcp-config", mcpFile,
       ...((typeof this.opts.userMcp === "function" ? this.opts.userMcp() : this.opts.userMcp) ? [] : ["--strict-mcp-config"]),
       "--permission-prompt-tool", "mcp__kamharn__approve",
+      // инструменты самого хаба (файл пользователю, у Диспетчера — управление сессиями) не спрашиваем: опасное они отсекают сами
+      "--allowedTools", ["mcp__kamharn", ...(this.opts.sessionExtras?.(s.id)?.allowedTools ?? [])].join(","),
       ...(s.system ? ["--append-system-prompt", s.system] : []),
       ...(s.effort ? ["--effort", s.effort] : []),
       // глобальные правила пользователя (обращение, «план → проверка», коммиты) — про код; чату не про код они мешают
@@ -324,7 +328,7 @@ export class ClaudeEngine implements Engine {
   private ensureProc(s: Sess): ChildProcess {
     if (s.proc && s.proc.exitCode === null) return s.proc;
     const mcpFile = join(this.opts.dataDir, "claude-mcp", `${s.id}.json`);
-    writeFileSync(mcpFile, JSON.stringify({ mcpServers: { ...this.opts.extraMcp?.(), kamharn: { type: "http", url: `${this.opts.mcpBaseUrl()}/${s.id}` } } }));
+    writeFileSync(mcpFile, JSON.stringify({ mcpServers: { ...this.opts.extraMcp?.(), ...this.opts.sessionExtras?.(s.id)?.mcp, kamharn: { type: "http", url: `${this.opts.mcpBaseUrl()}/${s.id}` } } }));
     const args = this.procArgs(s, mcpFile);
     this.log(`${L("старт процесса", "starting process")} ${s.id.slice(0, 8)} (${s.forkFrom ? "fork " + s.forkFrom.slice(0, 8) : s.hasHistory ? "resume" : "new"}, ${s.model.modelId})`);
     const proc = spawn(this.bin, args, {

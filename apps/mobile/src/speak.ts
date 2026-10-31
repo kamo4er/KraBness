@@ -30,6 +30,11 @@ export function toggleSpeak(id: string, md: string): void {
     void Speech.stop();
     return set(undefined);
   }
+  sayMessage(id, md);
+}
+
+/** Прочитать сейчас (режим «Разговор»): то, что звучало, обрывается. */
+export function sayMessage(id: string, md: string): void {
   void Speech.stop();
   set(id);
   Speech.speak(speakableText(md), {
