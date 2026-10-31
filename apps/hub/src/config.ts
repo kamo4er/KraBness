@@ -52,7 +52,7 @@ export interface HubConfig {
   /** подсказка агентам про живые артефакты (```html) и диаграммы (```mermaid); по умолчанию включена */
   artifactsHint?: boolean;
   /** Диспетчер (dispatcher.ts): модель Claude его сессии (по умолчанию Opus); computer: false — без управления ПК */
-  dispatcher?: { model?: string; computer?: boolean };
+  dispatcher?: { model?: string; computer?: boolean; quickModel?: string; local?: { url?: string; model?: string } };
   /** голос на ПК (voice.ts): включён, микрофон, порог слова-активатора */
   voice?: { enabled?: boolean; device?: string; threshold?: number };
   /** удалённый доступ через свой VPS (remote.ts): SSH-туннель + HTTPS на сервере */

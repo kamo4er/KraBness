@@ -149,6 +149,31 @@ function registerHarness(server: McpServer, d: Dispatcher, scope: string): void 
     ({ goal, directory, title }) => run(() => d.createTask({ goal, directory, ...(title ? { title } : {}) }))(),
   );
   server.registerTool(
+    "ask_model",
+    {
+      description:
+        "Ask a cheaper model a one-off question without tools or history: summarize, translate, classify, rephrase, draft. role=quick — Claude Haiku; role=local — the local model on this PC (free; if it's off, Haiku answers). Use it instead of spending your own effort on routine text work.",
+      inputSchema: { role: z.enum(["quick", "local"]), prompt: z.string() },
+    },
+    ({ role, prompt }) => run(() => d.askModel(role, prompt))(),
+  );
+  server.registerTool(
+    "search_history",
+    {
+      description: "Full-text search over all KraBness chats (user and agent messages). Returns session id, title, who, date and a snippet with matches in **bold**. All words must match (word beginnings).",
+      inputSchema: { query: z.string(), limit: z.number().int().optional().describe("default 10, max 30") },
+    },
+    ({ query, limit }) => run(() => d.searchHistory(query, limit ?? 10))(),
+  );
+  server.registerTool(
+    "remember",
+    {
+      description: "Save a lasting fact to your memory (it is in your system prompt from the next message). about=user — about the user (who, preferences, people); about=notes — agreements, decisions, where things are.",
+      inputSchema: { fact: z.string(), about: z.enum(["user", "notes"]) },
+    },
+    ({ fact, about }) => run(() => d.remember(fact, about))(),
+  );
+  server.registerTool(
     "show_screen",
     { description: "Take a screenshot of the user's whole desktop and send it to them in this chat. Use it to show the result of computer actions (Windows-MCP screenshots can't be sent).", inputSchema: {} },
     () => run(() => d.showScreen(scope))(),

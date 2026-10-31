@@ -458,3 +458,14 @@ section .update__notes { margin: 6px 0 10px; }
 .bars__col--on { background: var(--bg3); }
 .bars__bar { width: 100%; max-width: 24px; border-radius: 4px 4px 0 0; min-height: 0; }
 .bars__axis { display: flex; justify-content: space-between; font-size: 12px; margin-top: 4px; }
+/* ---------- поиск по всем чатам ---------- */
+.searchall { padding: 8px 12px 4px; position: relative; }
+.searchall__input { width: 100%; box-sizing: border-box; }
+.searchall__hits { margin-top: 6px; max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.searchall__hit { text-align: left; background: var(--bg2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; color: inherit; cursor: pointer; display: flex; flex-direction: column; gap: 2px; font: inherit; }
+.searchall__hit:hover { border-color: var(--accent, #4a8cff); }
+.searchall__meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.searchall__meta b { color: var(--text); font-weight: 600; }
+.searchall__snip { font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.searchall__snip b { color: #ffd166; font-weight: 600; }
+.searchall__empty { margin: 4px 2px; font-size: 13px; }

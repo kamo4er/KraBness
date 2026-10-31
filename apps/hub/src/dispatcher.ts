@@ -1,7 +1,7 @@
 // Диспетчер — особая сессия Claude: помощник, который раздаёт работу остальным сессиям, следит за ними и докладывает.
 // Сам код не пишет. Инструменты управления харнессом (MCP harness в mcp.ts) есть только у него.
 // План — tmp/plans/krabness-dispatcher.md.
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { applyEvent, emptyView, type CreateTaskRequest, type EngineId, type ModelRef, type PermissionReply, type QuestionAnswers, type SessionInfo, type SessionView, type TaskInfo } from "@kamharn/protocol";
@@ -75,8 +75,63 @@ function computerPrompt(): string {
   );
 }
 
-export function dispatcherPrompt(computer = false): string {
-  return basePrompt() + (computer ? "\n\n" + computerPrompt() : "");
+// ---------- память: два файла в папке Диспетчера, их текст — в его промпте ----------
+
+export const MEMORY_FILES = { user: "USER.md", notes: "MEMORY.md" } as const;
+/** больше — в промпт не тащим целиком: файл пора сжать */
+const MEMORY_MAX = 8000;
+
+function memoryHeader(kind: keyof typeof MEMORY_FILES): string {
+  return kind === "user"
+    ? L("# О пользователе\n\nКто он, как к нему обращаться, предпочтения, люди, устройства.\n", "# About the user\n\nWho they are, how to address them, preferences, people, devices.\n")
+    : L("# Заметки Диспетчера\n\nДоговорённости, решения, где что лежит.\n", "# Dispatcher notes\n\nAgreements, decisions, where things are.\n");
+}
+
+/** Создать файлы памяти, если их нет. */
+export function initMemory(dir: string): void {
+  for (const kind of Object.keys(MEMORY_FILES) as Array<keyof typeof MEMORY_FILES>) {
+    const p = join(dir, MEMORY_FILES[kind]);
+    if (!existsSync(p)) writeFileSync(p, memoryHeader(kind));
+  }
+}
+
+/** Текст памяти для промпта (пустые заготовки не тащим). */
+export function memoryText(dir: string): string {
+  const parts: string[] = [];
+  for (const kind of Object.keys(MEMORY_FILES) as Array<keyof typeof MEMORY_FILES>) {
+    let text = "";
+    try {
+      text = readFileSync(join(dir, MEMORY_FILES[kind]), "utf8").trim();
+    } catch {
+      continue;
+    }
+    if (!text || text === memoryHeader(kind).trim()) continue;
+    if (text.length > MEMORY_MAX) text = text.slice(0, MEMORY_MAX) + L("\n…(дальше обрезано — сожми файл)", "\n…(cut — compact the file)");
+    parts.push(`<${MEMORY_FILES[kind]}>\n${text}\n</${MEMORY_FILES[kind]}>`);
+  }
+  return parts.join("\n\n");
+}
+
+/** Дописать факт в память: about=user — о пользователе, иначе — в заметки. */
+export function rememberFact(dir: string, fact: string, about: "user" | "notes"): string {
+  const clean = fact.replace(/\s+/g, " ").trim();
+  if (!clean) throw new HttpError(400, "Empty fact");
+  const p = join(dir, MEMORY_FILES[about]);
+  if (!existsSync(p)) writeFileSync(p, memoryHeader(about));
+  if (statSync(p).size > MEMORY_MAX * 2) throw new HttpError(409, `${MEMORY_FILES[about]} is too big — compact it first (Edit the file: merge, drop stale lines).`);
+  appendFileSync(p, `- ${clean} (${new Date().toISOString().slice(0, 10)})\n`);
+  return `Saved to ${MEMORY_FILES[about]}.`;
+}
+
+function memoryPrompt(memory: string): string {
+  return L(
+    `Память (файлы USER.md и MEMORY.md в твоей папке; новое — remember, править и сжимать — обычным Edit). Прошлые разговоры во всех сессиях ищи search_history.\n\n${memory || "(пока пусто)"}`,
+    `Memory (USER.md and MEMORY.md in your folder; new facts — remember, edit and compact — with a normal Edit). Search past conversations in all sessions with search_history.\n\n${memory || "(empty so far)"}`,
+  );
+}
+
+export function dispatcherPrompt(computer = false, memory?: string): string {
+  return basePrompt() + (computer ? "\n\n" + computerPrompt() : "") + (memory !== undefined ? "\n\n" + memoryPrompt(memory) : "");
 }
 
 function basePrompt(): string {
@@ -84,7 +139,7 @@ function basePrompt(): string {
     `Ты — Диспетчер KraBness: личный помощник пользователя на его ПК. Тебя зовут голосом или текстом с телефона и с ПК.
 
 Что ты делаешь:
-- Раздаёшь работу кодинг-сессиям KraBness и следишь за ними: инструменты list_sessions, read_session, send_to_session, wait_session, answer_request, create_session, create_task, list_models.
+- Раздаёшь работу кодинг-сессиям KraBness и следишь за ними: инструменты list_sessions, read_session, send_to_session, wait_session, answer_request, create_session, create_task, list_models, search_history, remember, ask_model.
 - Код в проектах сам не пишешь и файлы проектов не правишь — это делают сессии. Твоя папка — для твоих заметок.
 - Отвечаешь коротко: первая строка — итог (её могут озвучить), детали ниже.
 
@@ -94,11 +149,12 @@ function basePrompt(): string {
 - Сессия спрашивает или просит разрешения — ответь сам (answer_request), если ответ очевиден из того, что хотел пользователь. Сомневаешься — спроси пользователя.
 - Влить ветку, git push, удалить файлы или сессии, всё необратимое — никогда сам: только с прямого «да» пользователя в этом разговоре.
 - Новая работа: сложное — сессия Claude (Opus или Sonnet), рутина и правки по списку — opencode с Kimi, если она есть в list_models. Большая задача от цели до отчёта — create_task.
-- Не дёргай сессию, которая работает: дождись (wait_session).`,
+- Не дёргай сессию, которая работает: дождись (wait_session).
+- Береги лимит: пересказать, перевести, классифицировать, набросать текст — отдай ask_model (quick — Haiku, local — локальная модель, бесплатно).`,
     `You are the KraBness Dispatcher: the user's personal assistant on their PC. They call you by voice or text from the phone and the PC.
 
 What you do:
-- Hand out work to KraBness coding sessions and watch them: tools list_sessions, read_session, send_to_session, wait_session, answer_request, create_session, create_task, list_models.
+- Hand out work to KraBness coding sessions and watch them: tools list_sessions, read_session, send_to_session, wait_session, answer_request, create_session, create_task, list_models, search_history, remember, ask_model.
 - You don't write project code or edit project files yourself — sessions do that. Your folder is for your own notes.
 - Answer briefly: the first line is the result (it may be read aloud), details below.
 
@@ -108,7 +164,8 @@ Working with sessions:
 - A session asks a question or for permission — answer it yourself (answer_request) when the answer is obvious from what the user wanted. When in doubt, ask the user.
 - Merging a branch, git push, deleting files or sessions, anything irreversible — never on your own: only with the user's direct "yes" in this conversation.
 - New work: hard things — a Claude session (Opus or Sonnet), routine and list edits — opencode with Kimi if list_models has it. A big task from goal to report — create_task.
-- Don't poke a session that is working: wait for it (wait_session).`,
+- Don't poke a session that is working: wait for it (wait_session).
+- Save the limit: summarizing, translating, classifying, drafting text — hand it to ask_model (quick — Haiku, local — the local model, free).`,
   );
 }
 
@@ -151,6 +208,8 @@ export interface DispatcherDeps {
   config: ConfigStore;
   tasks?: { create(req: CreateTaskRequest): Promise<TaskInfo> };
   files?: FileStore;
+  /** разовый вопрос модели Claude без инструментов (ClaudeEngine.ask) */
+  ask?: (prompt: string, model: string) => Promise<string>;
   /** снимок экрана (в тестах — подделка) */
   screen?: () => Promise<Buffer>;
 }
@@ -185,11 +244,15 @@ export class Dispatcher {
   /** Есть — вернуть, нет — создать: Claude, папка Dispatcher в первой разрешённой, режим «Автономно». */
   async ensure(): Promise<SessionInfo> {
     const have = this.session();
-    if (have) return have;
+    if (have) {
+      initMemory(have.directory);
+      return have;
+    }
     const root = this.d.config.config.roots[0];
     if (!root) throw new HttpError(409, L("Нет разрешённых папок", "No allowed folders"));
     const directory = join(root, "Dispatcher");
     mkdirSync(directory, { recursive: true });
+    initMemory(directory);
     const model: ModelRef = { providerId: "anthropic", modelId: this.d.config.config.dispatcher?.model || "claude-opus-5-5" };
     return this.d.sessions.create({ engine: "claude", directory, model, permissionMode: "auto", title: L("🦀 Диспетчер", "🦀 Dispatcher"), kind: "dispatcher" });
   }
@@ -312,6 +375,49 @@ export class Dispatcher {
     if (!this.d.tasks) throw new HttpError(409, L("Задачи недоступны", "Tasks are unavailable"));
     const t = await this.d.tasks.create({ goal: req.goal, directory: req.directory, ...(req.title ? { title: req.title } : {}) });
     return L(`Задача ${t.id} «${t.title}» в очереди. Ход виден на странице задач.`, `Task ${t.id} “${t.title}” is queued. Progress is on the tasks page.`);
+  }
+
+  /** Разовый вопрос дешёвой модели: quick — Haiku через Claude CLI, local — Strata (OpenAI-совместимый сервер), не отвечает — Haiku. */
+  async askModel(role: "quick" | "local", prompt: string): Promise<string> {
+    if (!prompt.trim()) throw new HttpError(400, "Empty prompt");
+    const cfg = this.d.config.config.dispatcher ?? {};
+    const quick = async () => {
+      if (!this.d.ask) throw new HttpError(409, L("Claude недоступен", "Claude is unavailable"));
+      return this.d.ask(prompt, cfg.quickModel || "claude-haiku-5-5");
+    };
+    if (role === "quick") return quick();
+    const url = (cfg.local?.url || "http://127.0.0.1:8080/v1").replace(/\/+$/, "");
+    try {
+      const r = await fetch(`${url}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: cfg.local?.model || "strata", messages: [{ role: "user", content: prompt }], max_tokens: 2000 }),
+        signal: AbortSignal.timeout(90_000),
+      });
+      if (!r.ok) throw new Error(`${r.status}`);
+      const j = (await r.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      const text = j.choices?.[0]?.message?.content?.trim();
+      if (!text) throw new Error("empty");
+      return text;
+    } catch {
+      // Strata выключена или не ответила — не повод ронять задачу
+      return `${await quick()}\n\n(${L("локальная модель не ответила — ответил Haiku", "the local model didn't answer — Haiku did")})`;
+    }
+  }
+
+  /** Поиск по всем чатам: строки «сессия · кто · дата: кусок текста». */
+  searchHistory(query: string, limit = 10): string {
+    const hits = this.d.sessions.search(query, Math.min(Math.max(1, limit), 30));
+    if (!hits.length) return L("Ничего не нашлось. Попробуй другие слова (ищется по началу слова).", "Nothing found. Try other words (matches word beginnings).");
+    return hits
+      .map((h) => `${h.sessionId} · ${h.title} · ${h.role === "user" ? L("пользователь", "user") : L("агент", "agent")} · ${new Date(h.ts).toISOString().slice(0, 16).replace("T", " ")}\n    ${h.snippet.replace(/\s+/g, " ")}`)
+      .join("\n");
+  }
+
+  remember(fact: string, about: "user" | "notes"): string {
+    const d = this.session();
+    if (!d) throw new HttpError(409, L("Диспетчер не создан", "The Dispatcher isn't created"));
+    return rememberFact(d.directory, fact, about);
   }
 
   /** Снимок экрана пользователю в чат Диспетчера: снимки Windows-MCP лежат в служебной папке Claude, отправлять оттуда нельзя. */

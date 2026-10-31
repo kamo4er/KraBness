@@ -798,3 +798,14 @@ export interface VoiceStatus {
   /** микрофон (номер или часть имени); пусто — системный */
   device: string;
 }
+
+/** Найденное поиском по всем чатам (`GET /api/search`). */
+export interface SearchHit {
+  sessionId: string;
+  title: string;
+  messageId: string;
+  role: string;
+  ts: number;
+  /** кусок текста, найденные слова в **…** */
+  snippet: string;
+}

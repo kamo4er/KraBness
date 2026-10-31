@@ -14,6 +14,7 @@ import { ModelPickHost } from "./ModelPick.tsx";
 import { PairScreen } from "./PairScreen.tsx";
 import { Limits } from "./Parts.tsx";
 import { UpdateBanner } from "./Updates.tsx";
+import { SearchAll } from "./SearchAll.tsx";
 import { t, locale, type SessionGroup, type SessionInfo } from "@kamharn/client";
 
 const connLabel = (c: "connecting" | "online" | "offline" | "unauthorized") =>
@@ -49,6 +50,7 @@ export function App() {
           </div>
         )}
         <UpdateBanner />
+        <SearchAll />
         <DispatcherLink activeId={route.page === "session" ? route.id : undefined} />
         <TasksLink active={route.page === "tasks" || route.page === "task"} />
         <SessionList sessions={state.sessions.filter((s) => !s.taskId && s.kind !== "dispatcher")} groups={state.groups} activeId={route.page === "session" || route.page === "project" ? route.id : undefined} />

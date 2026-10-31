@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import Fastify from "fastify";
+import { createServer } from "node:http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { EngineId, PermissionReply } from "@kamharn/protocol";
@@ -210,4 +211,74 @@ test("компьютер: uvx находится, Windows-MCP закреплён
   };
   assert.equal(allowed("other"), "mcp__kamharn");
   assert.match(allowed("disp"), /^mcp__kamharn,mcp__windows__Screenshot,/);
+});
+
+test("память и поиск: файлы памяти в промпте, remember дописывает, search_history находит по всем чатам", async () => {
+  const { root, sessions, claude, opencode, dispatcher } = await setup();
+  const d = await dispatcher.ensure();
+  const dir = join(root, "Dispatcher");
+  assert.ok(existsSync(join(dir, "USER.md")) && existsSync(join(dir, "MEMORY.md")), "файлы памяти созданы");
+  await sessions.prompt(d.id, "x");
+  assert.match(claude.prompts.at(-1)!.system!, /\(пока пусто\)/, "пустые заготовки в промпт не идут");
+  assert.match(dispatcher.remember("Зовут Ваня, жена Аня", "user"), /USER\.md/);
+  dispatcher.remember("Прокси Claude — только через VPS", "notes");
+  assert.match(readFileSync(join(dir, "USER.md"), "utf8"), /^- Зовут Ваня, жена Аня \(\d{4}-\d{2}-\d{2}\)$/m);
+  await sessions.prompt(d.id, "y");
+  const sys = claude.prompts.at(-1)!.system!;
+  assert.match(sys, /<USER\.md>[\s\S]*жена Аня[\s\S]*<\/USER\.md>/);
+  assert.match(sys, /<MEMORY\.md>[\s\S]*только через VPS/);
+
+  // поиск: текст ответа агента в другой сессии попадает в индекс сразу
+  const w = await sessions.create({ engine: "opencode", directory: root, title: "Генерация картинок" });
+  await sessions.prompt(w.id, "почему GigaChat падает через прокси");
+  await new Promise((r) => setTimeout(r, 300));
+  const found = dispatcher.searchHistory("gigachat прокс");
+  assert.match(found, new RegExp(`${w.id} · Генерация картинок · агент`));
+  assert.match(found, /\*\*GigaChat\*\*/);
+  assert.match(dispatcher.searchHistory("несуществующееслово"), /Ничего не нашлось/);
+  // удалили сессию — из поиска пропала
+  sessions.delete(w.id);
+  assert.match(dispatcher.searchHistory("gigachat"), /Ничего не нашлось/);
+  void opencode;
+});
+
+test("поиск: старая история попадает в индекс один раз, повтор части заменяет текст", () => {
+  const base = mkdtempSync(join(tmpdir(), "kh-search-"));
+  const db = new Db(join(base, "t.db"));
+  db.setMeta("search.v1", ""); // как до появления поиска: метки нет
+  db.insertSession({ id: "s1", engine: "opencode", engineSessionId: "e1", directory: base, title: "Старая", model: { providerId: "p", modelId: "m" }, permissionMode: "auto", status: "idle", createdAt: 1, updatedAt: 1, lastSeq: 0 });
+  db.appendEvent("s1", { type: "message.upserted", message: { id: "m1", role: "user", createdAt: 1 } });
+  db.appendEvent("s1", { type: "part.upserted", messageId: "m1", part: { type: "text", id: "p1", text: "черновик" } });
+  db.appendEvent("s1", { type: "part.upserted", messageId: "m1", part: { type: "text", id: "p1", text: "настрой маршрутизатор Keenetic" } });
+  assert.equal(db.backfillSearch(), 1);
+  assert.equal(db.backfillSearch(), 0, "второй раз не идёт");
+  const hits = db.searchText("маршрутиз");
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0]!.role, "user");
+  assert.equal(db.searchText("черновик").length, 0, "старая версия части заменена");
+});
+
+test("ask_model: quick — Haiku, local — локальный сервер, он молчит — Haiku с пометкой", async () => {
+  const { sessions, config, files } = await setup();
+  const asked: Array<[string, string]> = [];
+  const d = new Dispatcher({ sessions, config, files, ask: async (p, m) => (asked.push([p, m]), `haiku: ${p}`) });
+  assert.equal(await d.askModel("quick", "перескажи"), "haiku: перескажи");
+  assert.deepEqual(asked.at(-1), ["перескажи", "claude-haiku-5-5"]);
+  // поддельная Strata
+  const got: unknown[] = [];
+  const srv = createServer((req, res) => {
+    let b = "";
+    req.on("data", (c) => (b += c)).on("end", () => {
+      got.push(JSON.parse(b));
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ choices: [{ message: { content: "локально: ок" } }] }));
+    });
+  });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+  config.config.dispatcher = { local: { url: `http://127.0.0.1:${(srv.address() as { port: number }).port}/v1`, model: "strata" } };
+  assert.equal(await d.askModel("local", "классифицируй"), "локально: ок");
+  assert.deepEqual((got[0] as { model: string; messages: unknown[] }).model, "strata");
+  await new Promise((r) => srv.close(r));
+  // сервер выключен — ответил Haiku
+  assert.match(await d.askModel("local", "ещё"), /^haiku: ещё\n\n\(локальная модель не ответила/);
 });

@@ -203,11 +203,11 @@ test("бот сессии: двое — у каждого своё имя, от�
   msg(11, { text: `/start ${info.code}` });
   await waitFor(() => bots.info(s.id).chats.length === 1, "Димы");
   msg(22, { text: `/start ${bots.info(s.id).code}` }, { id: 22, first_name: "Marina_K" });
-  await waitFor(() => bots.info(s.id).chats.length === 2, "Марины");
+  await waitFor(() => bots.info(s.id).chats.length === 2, "Ани");
   // имя из профиля Telegram — какое есть; в KraBness правим
   assert.throws(() => bots.renameChat(s.id, 22, "  "), /Пустое|Empty/);
   assert.throws(() => bots.renameChat(s.id, 77, "Кто-то"), /Нет такого|No such/);
-  assert.deepEqual(bots.renameChat(s.id, 22, " Марина ").chats, [{ id: 11, name: "Дима" }, { id: 22, name: "Марина" }]);
+  assert.deepEqual(bots.renameChat(s.id, 22, " Аня ").chats, [{ id: 11, name: "Дима" }, { id: 22, name: "Аня" }]);
 
   const ev = (e: SessionEvent) => sink().event("es1", e);
   const answer = (id: string, text: string) => {
@@ -218,15 +218,15 @@ test("бот сессии: двое — у каждого своё имя, от�
   calls.length = 0;
 
   msg(22, { text: "Какая температура нормальная?" }, { id: 22, first_name: "Marina_K" });
-  await waitFor(() => prompts.length === 1, "промпта Марины");
-  assert.equal(prompts[0]!.text, "[Telegram: Марина]" + String.fromCharCode(10) + "Какая температура нормальная?");
+  await waitFor(() => prompts.length === 1, "промпта Ани");
+  assert.equal(prompts[0]!.text, "[Telegram: Аня]" + String.fromCharCode(10) + "Какая температура нормальная?");
   ev({ type: "session.updated", patch: { status: "busy" } });
   await waitFor(() => to("sendChatAction").length >= 1, "«печатает»");
-  answer("a1", "До 37,5, Марина.");
+  answer("a1", "До 37,5, Аня.");
   ev({ type: "session.updated", patch: { status: "idle" } });
   await waitFor(() => to("sendMessage").length === 1, "ответа");
-  assert.deepEqual([...new Set(to("sendChatAction"))], [22], "«печатает» — только Марине");
-  assert.deepEqual(to("sendMessage"), [22], "ответ — только Марине");
+  assert.deepEqual([...new Set(to("sendChatAction"))], [22], "«печатает» — только Ане");
+  assert.deepEqual(to("sendMessage"), [22], "ответ — только Ане");
 
   // ход начат из KraBness (не из Telegram): ни «печатает», ни ответа, ни кнопок в Telegram
   calls.length = 0;

@@ -698,6 +698,8 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     if (!deps.dispatcher) throw new HttpError(404, L("Диспетчер недоступен", "The Dispatcher is unavailable"));
     return deps.dispatcher.ensure();
   });
+  // поиск по всем чатам
+  app.get<{ Querystring: { q?: string; limit?: string } }>("/api/search", async (req) => sessions.search(String(req.query.q ?? "").slice(0, 300), Number(req.query.limit ?? 20) || 20));
   app.get("/api/sessions", async () => sessions.list());
   // kind ставит только хаб (Диспетчер получает инструменты управления): из API не принимаем
   app.post<{ Body: CreateSessionRequest }>("/api/sessions", async (req) => sessions.create({ ...req.body, kind: undefined }));

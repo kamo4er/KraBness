@@ -100,6 +100,13 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   const cfg = config.config;
   mkdirSync(cfg.dataDir, { recursive: true });
   const db = new Db(join(cfg.dataDir, "kamharn.db"));
+  // поиск по всем чатам: старую историю — в индекс один раз
+  try {
+    const n = db.backfillSearch();
+    if (n) log(`search: indexed ${n} message parts`);
+  } catch (e) {
+    log(`search: backfill failed: ${(e as Error).message}`);
+  }
   // с этого момента расход считается вживую; всё раньше — история задним числом (backfillUsage)
   if (!db.getMeta("usage.since")) db.setMeta("usage.since", String(Date.now()));
   const auth = new Auth(db);
@@ -115,7 +122,7 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   // задачи: конвейер над сессиями (исполнитель → проверки → ревью → отчёт)
   const tasks = new Orchestrator({ sessions, db, config, autoCheck, notify: (sid, m) => notifier.notify(sid, m), log });
   const voice = new VoiceService({ config, hubUrl: () => localBase, log, ...opts.voice });
-  const dispatcher = new Dispatcher({ sessions, config, tasks, files });
+  const dispatcher = new Dispatcher({ sessions, config, tasks, files, ask: (p, m) => (claude ? claude.ask(p, m) : Promise.reject(new Error("claude is off"))) });
   // уведомления в свой Telegram-бот (если настроен): кнопки подтверждения и ответ агенту реплаем
   const telegram = new TelegramBot(
     config,

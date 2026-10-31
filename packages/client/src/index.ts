@@ -7,6 +7,7 @@ import {
   upsertPart,
   type AppRelease,
   type VoiceStatus,
+  type SearchHit,
   type ClaudeLimits,
   type UsageReport,
   type SessionBotInfo,
@@ -558,6 +559,8 @@ export class HubClient {
   openPreview = (port: number, session?: string) => this.api<{ url: string }>("POST", "/api/preview", { port, via: this.baseUrl, ...(session ? { session } : {}) });
   sleepPc = (delaySec = 20) => this.api<{ ok: true; delaySec: number }>("POST", "/api/hub/sleep", { delaySec });
   /** голос на ПК: «Крабик, …» → Диспетчер → ответ вслух */
+  /** поиск по всем чатам */
+  search = (q: string, limit = 20) => this.api<SearchHit[]>("GET", `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`);
   voice = () => this.api<VoiceStatus>("GET", "/api/voice");
   setVoice = (patch: { enabled?: boolean; device?: string }) => this.api<VoiceStatus>("PUT", "/api/voice", patch);
   wakeConfig = () => this.api<WakeRuntime>("GET", "/api/wake");

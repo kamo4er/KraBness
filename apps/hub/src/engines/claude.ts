@@ -197,6 +197,35 @@ export class ClaudeEngine implements Engine {
   }
 
   /** Вход в Claude Code (`claude auth status --json`), кэш на минуту; force — спросить заново. */
+  /** Разовый вопрос модели без инструментов и истории (ask_model Диспетчера): пересказать, классифицировать, переформулировать. */
+  ask(prompt: string, model: string, timeoutMs = 120_000): Promise<string> {
+    const args = ["-p", "--model", model, "--output-format", "json", "--tools", "", "--strict-mcp-config", "--mcp-config", JSON.stringify({ mcpServers: {} }), "--no-session-persistence"];
+    return new Promise((resolve, reject) => {
+      const p = spawn(this.bin, args, { env: this.childEnv(), stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      let out = "";
+      let err = "";
+      const timer = setTimeout(() => {
+        p.kill();
+        reject(new Error(L("Модель не ответила вовремя", "The model didn't answer in time")));
+      }, timeoutMs);
+      p.stdout?.on("data", (d: Buffer) => (out += d.toString("utf8")));
+      p.stderr?.on("data", (d: Buffer) => (err += d.toString("utf8")));
+      p.on("error", (e) => (clearTimeout(timer), reject(e)));
+      p.on("close", () => {
+        clearTimeout(timer);
+        try {
+          const j = JSON.parse(out) as { result?: string; is_error?: boolean };
+          if (j.is_error) return reject(new Error(j.result || err.trim() || "claude error"));
+          resolve(String(j.result ?? "").trim());
+        } catch {
+          reject(new Error(err.trim().slice(0, 300) || out.trim().slice(0, 300) || "claude: no answer"));
+        }
+      });
+      // текст — через stdin: в аргументах Windows режет длинное и кавычки
+      p.stdin?.end(prompt);
+    });
+  }
+
   authInfo(force = false): ClaudeAuthInfo & { error?: string } {
     if (!force && this.authCache && Date.now() - this.authCache.at < 60_000) return this.authCache.info;
     const apiKey = !!this.opts.apiKey?.();

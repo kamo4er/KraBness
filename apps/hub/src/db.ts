@@ -101,6 +101,71 @@ export class Db {
     this.db.exec(`CREATE INDEX IF NOT EXISTS usage_day ON usage(day)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS usage_session ON usage(session_id)`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    // поиск по всем чатам: тексты сообщений (не инструменты и не рассуждения); часть, обновлённая повторно, заменяет старую строку
+    this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(text, tokenize = 'unicode61 remove_diacritics 2')`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS search_parts (part_key TEXT PRIMARY KEY, rid INTEGER NOT NULL, session_id TEXT NOT NULL, message_id TEXT NOT NULL, role TEXT NOT NULL, ts INTEGER NOT NULL)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS search_parts_session ON search_parts(session_id)`);
+  }
+
+  // ---------- поиск по всем чатам ----------
+
+  /** Текст части сообщения в индекс (повтор той же части — замена). */
+  indexText(sessionId: string, messageId: string, partId: string, role: string, ts: number, text: string): void {
+    const key = `${sessionId}|${partId}`;
+    const old = this.db.prepare(`SELECT rid FROM search_parts WHERE part_key = ?`).get(key) as Row | undefined;
+    if (old) this.db.prepare(`DELETE FROM search_fts WHERE rowid = ?`).run(Number(old.rid));
+    if (!text.trim()) {
+      if (old) this.db.prepare(`DELETE FROM search_parts WHERE part_key = ?`).run(key);
+      return;
+    }
+    const r = this.db.prepare(`INSERT INTO search_fts (text) VALUES (?)`).run(text);
+    this.db
+      .prepare(`INSERT INTO search_parts (part_key, rid, session_id, message_id, role, ts) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(part_key) DO UPDATE SET rid = excluded.rid, role = excluded.role, ts = excluded.ts`)
+      .run(key, Number(r.lastInsertRowid), sessionId, messageId, role, ts);
+  }
+
+  /** Слова запроса — все обязательны, каждое как начало слова (у FTS нет русских окончаний: «крабик» найдёт «крабика»). */
+  searchText(query: string, limit = 20): Array<{ sessionId: string; title: string; messageId: string; role: string; ts: number; snippet: string }> {
+    const terms = (query.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []).slice(0, 12);
+    if (!terms.length) return [];
+    const match = terms.map((t) => `"${t}"*`).join(" ");
+    const rows = this.db
+      .prepare(
+        `SELECT p.session_id, s.title, p.message_id, p.role, p.ts, snippet(search_fts, 0, '**', '**', '…', 16) AS snip
+         FROM search_fts JOIN search_parts p ON p.rid = search_fts.rowid JOIN sessions s ON s.id = p.session_id
+         WHERE search_fts MATCH ? ORDER BY rank LIMIT ?`,
+      )
+      .all(match, Math.min(Math.max(1, limit), 100)) as Row[];
+    return rows.map((r) => ({ sessionId: String(r.session_id), title: String(r.title), messageId: String(r.message_id), role: String(r.role), ts: Number(r.ts), snippet: String(r.snip) }));
+  }
+
+  private dropSearch(sessionId: string): void {
+    const rids = this.db.prepare(`SELECT rid FROM search_parts WHERE session_id = ?`).all(sessionId) as Row[];
+    for (const r of rids) this.db.prepare(`DELETE FROM search_fts WHERE rowid = ?`).run(Number(r.rid));
+    this.db.prepare(`DELETE FROM search_parts WHERE session_id = ?`).run(sessionId);
+  }
+
+  /** Индекс по журналу, который был до появления поиска (один раз): последняя версия каждой текстовой части. */
+  backfillSearch(): number {
+    if (this.getMeta("search.v1")) return 0;
+    const roles = new Map<string, string>();
+    const parts = new Map<string, { sessionId: string; messageId: string; partId: string; ts: number; text: string }>();
+    for (const r of this.db.prepare(`SELECT session_id, ts, event_json FROM events ORDER BY session_id, seq`).iterate() as Iterable<Row>) {
+      const sid = String(r.session_id);
+      const ev = JSON.parse(String(r.event_json)) as SessionEvent;
+      if (ev.type === "message.upserted") roles.set(`${sid}|${ev.message.id}`, ev.message.role);
+      else if (ev.type === "part.upserted" && ev.part.type === "text") parts.set(`${sid}|${ev.part.id}`, { sessionId: sid, messageId: ev.messageId, partId: ev.part.id, ts: Number(r.ts), text: ev.part.text });
+    }
+    this.db.exec("BEGIN");
+    try {
+      for (const p of parts.values()) this.indexText(p.sessionId, p.messageId, p.partId, roles.get(`${p.sessionId}|${p.messageId}`) ?? "assistant", p.ts, p.text);
+      this.setMeta("search.v1", String(Date.now()));
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+    return parts.size;
   }
 
   getMeta(key: string): string | undefined {
@@ -236,6 +301,7 @@ export class Db {
 
   deleteSession(id: string): void {
     this.db.prepare(`DELETE FROM events WHERE session_id = ?`).run(id);
+    this.dropSearch(id);
     this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
   }
 

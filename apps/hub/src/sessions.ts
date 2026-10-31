@@ -16,6 +16,7 @@ import type {
   PermissionMode,
   PermissionReply,
   QuestionAnswers,
+  SearchHit,
   SessionEvent,
   SlashCommand,
   SessionInfo,
@@ -36,7 +37,7 @@ import { gitInfo } from "./project.ts";
 import { createWorktree, discardWorktree, GitError, mergeWorktree, removeWorktree, worktreeStatus } from "./worktree.ts";
 import { dayOf, emptyTotals, totalsOf, type UsageRecord } from "./usage.ts";
 import { L } from "./lang.ts";
-import { computerCommand, dispatcherPrompt } from "./dispatcher.ts";
+import { computerCommand, dispatcherPrompt, memoryText } from "./dispatcher.ts";
 
 /** Что клиенты KraBness умеют показывать — агенту, чтобы пользовался (на языке хаба, как и прочие промпты агенту). */
 export const artifactsHint = (): string =>
@@ -72,6 +73,8 @@ export class SessionManager extends EventEmitter<HubEvents> {
   private liveParts = new Map<string, Map<string, { messageId: string; part: Part }>>();
   /** requestId → deviceId, ответивший на запрос разрешения */
   private answeredBy = new Map<string, string>();
+  /** роль сообщения (для индекса поиска): сессия|сообщение → user/assistant */
+  private roles = new Map<string, "user" | "assistant">();
 
   /** когда карточка сессии последний раз уходила в общий список */
   private listBroadcastAt = new Map<string, number>();
@@ -88,6 +91,11 @@ export class SessionManager extends EventEmitter<HubEvents> {
     super();
     this.claudeProjectsDir = opts.claudeProjectsDir ?? join(homedir(), ".claude", "projects");
     this.setMaxListeners(0);
+  }
+
+  /** Поиск по всем чатам (тексты сообщений). */
+  search(query: string, limit = 20): SearchHit[] {
+    return this.db.searchText(query, limit);
   }
 
   /** Сессия хаба по id сессии движка (MCP узнаёт по нему Диспетчера). */
@@ -228,7 +236,7 @@ export class SessionManager extends EventEmitter<HubEvents> {
   private launchOpts(s: SessionInfo): { system?: string; effort?: string; noUserRules?: boolean } {
     const g = s.groupId ? this.db.getGroup(s.groupId) : undefined;
     // подсказка про то, что клиенты умеют показывать, — перед промптом группы
-    const system = [s.kind === "dispatcher" ? dispatcherPrompt(!!computerCommand(this.config)) : "", this.config.config.artifactsHint === false ? "" : artifactsHint(), g?.prompt ?? ""].filter(Boolean).join("\n\n");
+    const system = [s.kind === "dispatcher" ? dispatcherPrompt(!!computerCommand(this.config), memoryText(s.directory)) : "", this.config.config.artifactsHint === false ? "" : artifactsHint(), g?.prompt ?? ""].filter(Boolean).join("\n\n");
     return { ...(system ? { system } : {}), ...(g?.noUserRules ? { noUserRules: true } : {}), ...(s.effort ? { effort: s.effort } : {}) };
   }
 
@@ -647,6 +655,15 @@ export class SessionManager extends EventEmitter<HubEvents> {
   private append(sessionId: string, event: SessionEvent): StoredEvent {
     const stored = this.db.appendEvent(sessionId, event);
     if (event.type === "session.updated") this.db.updateSession(sessionId, event.patch);
+    // поиск по всем чатам: тексты сообщений
+    if (event.type === "message.upserted") this.roles.set(`${sessionId}|${event.message.id}`, event.message.role);
+    else if (event.type === "part.upserted" && event.part.type === "text") {
+      try {
+        this.db.indexText(sessionId, event.messageId, event.part.id, this.roles.get(`${sessionId}|${event.messageId}`) ?? "assistant", stored.ts, event.part.text);
+      } catch {
+        // поиск — не повод ронять журнал
+      }
+    }
     this.emit("event", stored);
     // карточку в общем списке (время, порядок) обновляем и во время работы, но не на каждую часть
     const last = this.listBroadcastAt.get(sessionId) ?? 0;

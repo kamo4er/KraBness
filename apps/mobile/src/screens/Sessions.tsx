@@ -1,7 +1,7 @@
 // Список сессий по группам: статус, движок, папка; создание новой и настройки.
 // Долгое нажатие на сессию — перенести в группу.
 import { useEffect, useMemo, useState } from "react";
-import { Image, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
+import { BackHandler, Image, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
 import { t, type SessionGroup, type SessionInfo, locale } from "@kamharn/client";
 import { client, recall, remember, useHub } from "../store.ts";
 import { SessionUsage } from "../Usage.tsx";
@@ -11,6 +11,7 @@ import { Btn, connLabel, ConnDot, EngineBadge, Limits, ListSheet } from "../ui.t
 import { C, S } from "../theme.ts";
 import { WakePanel } from "../WakePanel.tsx";
 import { HubUpdateBanner } from "../HubUpdate.tsx";
+import { SearchAll } from "../SearchAll.tsx";
 import { taskIcon } from "./Tasks.tsx";
 import { dialog } from "../dialog.tsx";
 
@@ -31,6 +32,13 @@ export function Sessions() {
   const state = useHub();
   const update = useUpdate();
   // связи нет дольше нескольких секунд — возможно, ПК спит
+  const [searching, setSearching] = useState(false);
+  // «назад» на телефоне закрывает поиск, а не приложение
+  useEffect(() => {
+    if (!searching) return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => (setSearching(false), true));
+    return () => sub.remove();
+  }, [searching]);
   const [longOffline, setLongOffline] = useState(false);
   const offline = state.conn === "offline" || state.conn === "connecting";
   useEffect(() => {
@@ -45,6 +53,7 @@ export function Sessions() {
         <Text style={S.h1}>KraBness</Text>
         <ConnDot conn={state.conn} />
         <Text style={[S.muted, { flex: 1 }]}>{state.conn === "online" ? "" : connLabel(state.conn)}</Text>
+        <Btn small title="🔍" onPress={() => setSearching(!searching)} />
         <TasksBtn />
         <Btn small kind="primary" title={t("+ Новая", "+ New")} onPress={() => go({ page: "new" })} />
         <Btn small title="⚙" onPress={() => go({ page: "settings" })} />
@@ -72,7 +81,8 @@ export function Sessions() {
           <WakePanel hint={t("ПК не отвечает. Может, он спит?", "The PC doesn't answer. Maybe it's asleep?")} />
         </View>
       ) : null}
-      <Grouped sessions={state.sessions.filter((x) => !x.taskId && x.kind !== "dispatcher")} dispatcher={state.sessions.find((x) => x.kind === "dispatcher")} groups={state.groups} empty={state.conn === "online" ? t("Сессий пока нет. Нажми «+ Новая».", "No sessions yet. Tap “+ New”.") : t("Загрузка…", "Loading…")} />
+      {searching ? <SearchAll onClose={() => setSearching(false)} /> : null}
+      {searching ? null : <Grouped sessions={state.sessions.filter((x) => !x.taskId && x.kind !== "dispatcher")} dispatcher={state.sessions.find((x) => x.kind === "dispatcher")} groups={state.groups} empty={state.conn === "online" ? t("Сессий пока нет. Нажми «+ Новая».", "No sessions yet. Tap “+ New”.") : t("Загрузка…", "Loading…")} />}
     </View>
   );
 }
