@@ -7,6 +7,9 @@ import {
   upsertPart,
   type AppRelease,
   type VoiceStatus,
+  type DispatcherBrains,
+  type MemoryInfo,
+  type MemoryRecall,
   type SearchHit,
   type ClaudeLimits,
   type UsageReport,
@@ -59,7 +62,7 @@ export { ago, baseName, fmtTokens, fmtCost, localDay } from "./format.ts";
 export { parseFileRef, resolveFileRef, type FileRef } from "./paths.ts";
 export { mentionAt, mentionText, applyMention } from "./mention.ts";
 export { artifactDocument, artifactSource, isArtifactFile, isArtifactLang } from "./artifact.ts";
-export { engineUsable, engineName, modelKey, parseModelKey, modelOptions, optionReady, defaultTaskModels, type EngineModelOption } from "./taskModels.ts";
+export { engineUsable, engineName, modelKey, parseModelKey, modelOptions, optionReady, defaultTaskModels, brainOptions, brainDownText, computerHint, type EngineModelOption } from "./taskModels.ts";
 export { t, tn, locale, getLang, getLangSetting, applyLangSetting, onLangChange } from "./i18n.ts";
 import { applyLangSetting, locale } from "./i18n.ts";
 
@@ -520,8 +523,8 @@ export class HubClient {
   /** список моделей у OpenAI-совместимого сервера (запрос идёт с ПК) */
   probeServer = (baseURL: string, apiKey?: string) => this.api<{ models: string[] }>("POST", "/api/providers/probe", { baseURL, apiKey });
 
-  createGroup = (g: { name: string; icon?: string; prompt?: string; noUserRules?: boolean }) => this.api<SessionGroup>("POST", "/api/groups", g);
-  updateGroup = (id: string, g: { name?: string; icon?: string; prompt?: string; noUserRules?: boolean; sort?: number }) => this.api<SessionGroup>("PATCH", `/api/groups/${id}`, g);
+  createGroup = (g: { name: string; icon?: string; prompt?: string; noUserRules?: boolean; noMemory?: boolean }) => this.api<SessionGroup>("POST", "/api/groups", g);
+  updateGroup = (id: string, g: { name?: string; icon?: string; prompt?: string; noUserRules?: boolean; noMemory?: boolean; sort?: number }) => this.api<SessionGroup>("PATCH", `/api/groups/${id}`, g);
   deleteGroup = (id: string) => this.api("DELETE", `/api/groups/${id}`);
 
   tasks = () => this.api<TaskInfo[]>("GET", "/api/tasks");
@@ -562,7 +565,12 @@ export class HubClient {
   /** поиск по всем чатам */
   search = (q: string, limit = 20) => this.api<SearchHit[]>("GET", `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`);
   voice = () => this.api<VoiceStatus>("GET", "/api/voice");
-  setVoice = (patch: { enabled?: boolean; device?: string; pause?: number }) => this.api<VoiceStatus>("PUT", "/api/voice", patch);
+  setVoice = (patch: { enabled?: boolean; device?: string; pause?: number; wake?: string }) => this.api<VoiceStatus>("PUT", "/api/voice", patch);
+  memoryInfo = () => this.api<MemoryInfo>("GET", "/api/memory");
+  memoryRecall = (q: string) => this.api<MemoryRecall>("GET", `/api/memory/recall?q=${encodeURIComponent(q)}&limit=10`);
+  memoryForget = (q: string) => this.api<{ forgotten: string[] }>("POST", "/api/memory/forget", { q });
+  dispatcherBrains = () => this.api<DispatcherBrains>("GET", "/api/dispatcher/brains");
+  setDispatcherBrains = (req: Partial<Pick<DispatcherBrains, "primary" | "fallback" | "autoFallback" | "computerOnOpencode">> & { backToPrimary?: boolean }) => this.api<DispatcherBrains>("PUT", "/api/dispatcher/brains", req);
   wakeConfig = () => this.api<WakeRuntime>("GET", "/api/wake");
   // ---------- «Новая сессия»: включённые движки и выбор по умолчанию ----------
   newSessionPrefs = () => this.api<NewSessionPrefs>("GET", "/api/new-session");

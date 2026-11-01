@@ -14,7 +14,7 @@ import { ConfigStore } from "../../src/config.ts";
 import { Db } from "../../src/db.ts";
 import { FileStore } from "../../src/files.ts";
 import { SessionManager } from "../../src/sessions.ts";
-import { computerExtras, DANGEROUS, Dispatcher, dispatcherPrompt, findUvx, WINDOWS_MCP } from "../../src/dispatcher.ts";
+import { computerExtras, DANGEROUS, Dispatcher, dispatcherPrompt, findUvx, matchAnswer, WINDOWS_MCP } from "../../src/dispatcher.ts";
 import { ClaudeEngine } from "../../src/engines/claude.ts";
 import { registerMcp } from "../../src/mcp.ts";
 import type { Engine, EngineSink } from "../../src/engines/types.ts";
@@ -71,8 +71,9 @@ async function setup() {
   await sessions.addEngine(claude.engine);
   await sessions.addEngine(opencode.engine);
   const created: string[] = [];
-  const dispatcher = new Dispatcher({ sessions, config, files, screen: async () => Buffer.from("fake-jpg"), tasks: { create: async (r) => (created.push(r.goal), { id: "tk_1", title: "t", goal: r.goal } as never) } });
-  return { base, root, config, sessions, files, claude, opencode, dispatcher, created };
+  const opened: string[] = [];
+  const dispatcher = new Dispatcher({ sessions, config, files, screen: async () => Buffer.from("fake-jpg"), openUrl: (u) => opened.push(u), tasks: { create: async (r) => (created.push(r.goal), { id: "tk_1", title: "t", goal: r.goal } as never) } });
+  return { base, root, config, sessions, files, claude, opencode, dispatcher, created, opened };
 }
 
 test("своя сессия: Claude, «Автономно», папка Dispatcher, свой промпт; повторно — та же", async () => {
@@ -81,7 +82,7 @@ test("своя сессия: Claude, «Автономно», папка Dispatch
   const d = await dispatcher.ensure();
   assert.equal(d.kind, "dispatcher");
   assert.equal(d.engine, "claude");
-  assert.equal(d.model.modelId, "claude-opus-5-5");
+  assert.equal(d.model.modelId, "claude-sonnet-5-5");
   assert.equal(d.permissionMode, "auto");
   assert.equal(d.directory, join(root, "Dispatcher"));
   assert.ok(existsSync(join(root, "Dispatcher")));
@@ -140,8 +141,16 @@ test("задачи и модели", async () => {
   assert.match(await dispatcher.createSession({ directory: root, engine: "opencode", model: { providerId: "p", modelId: "m" } }), /Создана сессия ks_/);
 });
 
+test("open_url: только http(s), адрес уходит браузеру целиком", async () => {
+  const { dispatcher, opened } = await setup();
+  assert.match(dispatcher.openUrl(" https://www.ozon.ru/search/?text=гусь+обнимусь&from=x "), /Opened/);
+  assert.deepEqual(opened, ["https://www.ozon.ru/search/?text=%D0%B3%D1%83%D1%81%D1%8C+%D0%BE%D0%B1%D0%BD%D0%B8%D0%BC%D1%83%D1%81%D1%8C&from=x"]);
+  for (const bad of ["file:///C:/Windows/notepad.exe", "ms-settings:privacy", "javascript:alert(1)", "ozon.ru"]) assert.throws(() => dispatcher.openUrl(bad), /http|URL/, bad);
+  assert.equal(opened.length, 1);
+});
+
 test("MCP: инструменты харнесса только в скоупе Диспетчера", async () => {
-  const { root, sessions, files, dispatcher } = await setup();
+  const { root, sessions, files, dispatcher, claude, config } = await setup();
   const d = await dispatcher.ensure();
   const w = await sessions.create({ engine: "claude", directory: root, title: "Обычная" });
   const app = Fastify();
@@ -156,13 +165,19 @@ test("MCP: инструменты харнесса только в скоупе 
   };
   try {
     const mine = await tools(sessions.engineSessionIdOf(d.id)!);
-    for (const n of ["list_sessions", "read_session", "send_to_session", "wait_session", "answer_request", "create_session", "create_task", "list_models", "show_screen"]) assert.ok(mine.names.includes(n), n);
+    for (const n of ["list_sessions", "read_session", "send_to_session", "wait_session", "answer_request", "create_session", "create_task", "list_models", "show_screen", "open_url"]) assert.ok(mine.names.includes(n), n);
     const shot = (await mine.c.callTool({ name: "show_screen", arguments: {} })) as { content: Array<{ text: string }> };
     const fid = /kamharn-file:(kf_\w+)/.exec(shot.content[0]!.text)?.[1];
     assert.ok(fid, "маркер файла в выводе");
     const f = files.get(fid!)!;
     assert.ok(f.path.startsWith(join(root, "Dispatcher", ".kamharn", "screens")), f.path);
     assert.equal(readFileSync(f.path, "utf8"), "fake-jpg");
+    // снимок приходит в чат файлом: движок показывает вызов, хаб находит маркер в выводе
+    const esid = sessions.engineSessionIdOf(d.id)!;
+    claude.sink().event(esid, { type: "message.upserted", message: { id: "ms", role: "assistant", createdAt: Date.now() } });
+    claude.sink().event(esid, { type: "part.upserted", messageId: "ms", part: { type: "tool", id: "ps", tool: "mcp__kamharn__show_screen", status: "completed", output: shot.content[0]!.text } });
+    const shown = sessions.eventsAfter(d.id, 0).flatMap((x) => (x.event.type === "part.upserted" && x.event.part.type === "file" ? [x.event.part.fileId] : []));
+    assert.deepEqual(shown, [fid]);
     const r = (await mine.c.callTool({ name: "list_sessions", arguments: {} })) as { content: Array<{ text: string }> };
     assert.match(r.content[0]!.text, /Обычная/);
     const bad = (await mine.c.callTool({ name: "read_session", arguments: { session_id: "ks_nope" } })) as { isError?: boolean };
@@ -256,6 +271,18 @@ test("поиск: старая история попадает в индекс �
   assert.equal(hits.length, 1);
   assert.equal(hits[0]!.role, "user");
   assert.equal(db.searchText("черновик").length, 0, "старая версия части заменена");
+});
+
+
+test("ответ голосом на вопрос с вариантами", () => {
+  const o = ["Отправить", "Не отправлять"];
+  assert.equal(matchAnswer("Да", o), "Отправить");
+  assert.equal(matchAnswer("нет, не надо", o), "Не отправлять");
+  assert.equal(matchAnswer("не отправлять пока", o), "Не отправлять");
+  assert.equal(matchAnswer("в синий цвет", ["Красный", "Синий (рекомендую)"]), "Синий (рекомендую)", "вариант внутри фразы");
+  assert.equal(matchAnswer("синенький", ["Красный", "Синий (рекомендую)"]), "синенький", "другая форма слова — свой текст");
+  assert.equal(matchAnswer("синий", ["Красный", "Синий (рекомендую)"]), "Синий (рекомендую)");
+  assert.equal(matchAnswer("потом решу", o), "потом решу");
 });
 
 test("ask_model: quick — Haiku, local — локальный сервер, он молчит — Haiku с пометкой", async () => {

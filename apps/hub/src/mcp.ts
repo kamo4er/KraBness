@@ -49,7 +49,8 @@ function buildServer(deps: McpDeps, scope: string): McpServer {
     },
   );
 
-  if (scope !== "opencode" && deps.claude) {
+  // у мозга Диспетчера на opencode разрешения свои, approve — это путь Claude
+  if (scope !== "opencode" && deps.claude && !deps.dispatcher?.isOpencodeBrain(scope)) {
     const claude = deps.claude;
     server.registerTool(
       "approve",
@@ -148,15 +149,18 @@ function registerHarness(server: McpServer, d: Dispatcher, scope: string): void 
     },
     ({ goal, directory, title }) => run(() => d.createTask({ goal, directory, ...(title ? { title } : {}) }))(),
   );
-  server.registerTool(
-    "ask_model",
-    {
-      description:
-        "Ask a cheaper model a one-off question without tools or history: summarize, translate, classify, rephrase, draft. role=quick — Claude Haiku; role=local — the local model on this PC (free; if it's off, Haiku answers). Use it instead of spending your own effort on routine text work.",
-      inputSchema: { role: z.enum(["quick", "local"]), prompt: z.string() },
-    },
-    ({ role, prompt }) => run(() => d.askModel(role, prompt))(),
-  );
+  // без Claude и без своего сервера отвечать некому
+  if (d.askAvailable()) {
+    server.registerTool(
+      "ask_model",
+      {
+        description:
+          "Ask a cheaper model a one-off question without tools or history: summarize, translate, classify, rephrase, draft. role=quick — Claude Haiku; role=local — the local model on this PC (free; if it's off, Haiku answers). Use it instead of spending your own effort on routine text work.",
+        inputSchema: { role: z.enum(["quick", "local"]), prompt: z.string() },
+      },
+      ({ role, prompt }) => run(() => d.askModel(role, prompt))(),
+    );
+  }
   server.registerTool(
     "search_history",
     {
@@ -165,6 +169,22 @@ function registerHarness(server: McpServer, d: Dispatcher, scope: string): void 
     },
     ({ query, limit }) => run(() => d.searchHistory(query, limit ?? 10))(),
   );
+  if (d.memoryOn()) {
+    server.registerTool(
+      "recall",
+      {
+        description:
+          "Long memory: what was said and done before, in all chats, by day. Use it first, before searching folders, sites or sessions: what did we do yesterday, where is X, how did we do Y, what did the user say about Z. Understands dates in the question (yesterday, 3 October). Returns that day's diary and matching records.",
+        inputSchema: { query: z.string(), day: z.string().optional().describe("YYYY-MM-DD, if you know the day"), limit: z.number().int().optional().describe("default 8, max 30") },
+      },
+      ({ query, day, limit }) => run(() => d.recall(query, day, limit ?? 8))(),
+    );
+    server.registerTool(
+      "forget",
+      { description: "Erase from long memory what matches the query, when the user asks to forget something. Returns what was erased.", inputSchema: { query: z.string() } },
+      ({ query }) => run(() => d.forget(query))(),
+    );
+  }
   server.registerTool(
     "remember",
     {
@@ -177,6 +197,14 @@ function registerHarness(server: McpServer, d: Dispatcher, scope: string): void 
     "show_screen",
     { description: "Take a screenshot of the user's whole desktop and send it to them in this chat. Use it to show the result of computer actions (Windows-MCP screenshots can't be sent).", inputSchema: {} },
     () => run(() => d.showScreen(scope))(),
+  );
+  server.registerTool(
+    "open_url",
+    {
+      description: "Open a web address in a new tab of the user's default browser (brings the browser to the front). Much faster than switching windows and typing the address with Windows-MCP: use it for any \"open site X\" or a search on a site (put the query into the URL).",
+      inputSchema: { url: z.string().describe("full http(s) address") },
+    },
+    ({ url }) => run(() => d.openUrl(url))(),
   );
   server.registerTool(
     "list_models",

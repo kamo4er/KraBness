@@ -12,6 +12,8 @@ import { L } from "./lang.ts";
 const LOG_LINES = 40;
 /** пауза конца фразы по умолчанию (с), как в voice/main.py --wake-pause */
 export const DEFAULT_PAUSE = 1.3;
+/** слово-активатор по умолчанию, как в voice/main.py --wake */
+export const DEFAULT_WAKE = "крабик";
 
 export interface VoiceDeps {
   config: ConfigStore;
@@ -58,6 +60,7 @@ export class VoiceService {
     if (v.threshold) args.push("--threshold", String(v.threshold));
     // пауза конца фразы: у фразы с «Крабиком» — она, у команды после сигнала — чуть дольше
     if (v.pause) args.push("--wake-pause", String(v.pause), "--pause", String(Math.round((v.pause + 0.3) * 10) / 10));
+    if (v.wake) args.push("--wake", v.wake);
     return { cmd: uv, args };
   }
 
@@ -71,7 +74,7 @@ export class VoiceService {
 
   status(): VoiceStatus {
     const why = this.unavailable();
-    return { enabled: !!this.d.config.config.voice?.enabled, state: this.state, ...(why ? { unavailable: why } : {}), log: this.lines.slice(-LOG_LINES), device: this.d.config.config.voice?.device ?? "", pause: this.d.config.config.voice?.pause ?? DEFAULT_PAUSE };
+    return { enabled: !!this.d.config.config.voice?.enabled, state: this.state, ...(why ? { unavailable: why } : {}), log: this.lines.slice(-LOG_LINES), device: this.d.config.config.voice?.device ?? "", pause: this.d.config.config.voice?.pause ?? DEFAULT_PAUSE, wake: this.d.config.config.voice?.wake || DEFAULT_WAKE };
   }
 
   /** При запуске хаба и после смены настройки. */
@@ -119,11 +122,15 @@ export class VoiceService {
   }
 
   /** Включить/выключить и микрофон (пусто — системный). */
-  set(patch: { enabled?: boolean; device?: string; pause?: number }): VoiceStatus {
+  set(patch: { enabled?: boolean; device?: string; pause?: number; wake?: string }): VoiceStatus {
     const cur = this.d.config.config.voice ?? {};
     const pause = typeof patch.pause === "number" && patch.pause >= 0.5 && patch.pause <= 5 ? { pause: patch.pause } : {};
-    const next = { ...cur, ...(typeof patch.enabled === "boolean" ? { enabled: patch.enabled } : {}), ...(typeof patch.device === "string" ? { device: patch.device.trim() } : {}), ...pause };
+    // одно слово из букв: оно уходит в аргументы запуска и в регулярку сервиса
+    const wakeWord = typeof patch.wake === "string" ? patch.wake.trim().toLowerCase() : undefined;
+    const wake = wakeWord !== undefined && (wakeWord === "" || /^\p{L}{3,20}$/u.test(wakeWord)) ? { wake: wakeWord } : {};
+    const next = { ...cur, ...(typeof patch.enabled === "boolean" ? { enabled: patch.enabled } : {}), ...(typeof patch.device === "string" ? { device: patch.device.trim() } : {}), ...pause, ...wake };
     if (!next.device) delete next.device;
+    if (!next.wake || next.wake === DEFAULT_WAKE) delete next.wake;
     this.d.config.config.voice = next;
     this.d.config.save();
     this.stop();

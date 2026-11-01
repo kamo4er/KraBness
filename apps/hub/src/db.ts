@@ -220,9 +220,10 @@ export class Db {
       .run(s.id, s.engine, s.engineSessionId, s.directory, s.title, JSON.stringify(s.model), s.permissionMode, s.status, s.createdAt, s.updatedAt, s.lastSeq, s.worktree ? JSON.stringify(s.worktree) : null, s.groupId || null, s.taskId || null, s.effort || null, s.kind || null);
   }
 
-  updateSession(id: string, patch: Partial<Pick<SessionInfo, "title" | "status" | "model" | "permissionMode" | "updatedAt" | "resumeAt" | "groupId" | "autoCheck" | "effort">>): void {
+  updateSession(id: string, patch: Partial<Pick<SessionInfo, "engine" | "title" | "status" | "model" | "permissionMode" | "updatedAt" | "resumeAt" | "groupId" | "autoCheck" | "effort">>): void {
     const sets: string[] = [];
     const vals: (string | number)[] = [];
+    if (patch.engine !== undefined) sets.push("engine = ?"), vals.push(patch.engine);
     if (patch.title !== undefined) sets.push("title = ?"), vals.push(patch.title);
     if (patch.permissionMode !== undefined) sets.push("permission_mode = ?"), vals.push(patch.permissionMode);
     if (patch.status !== undefined) sets.push("status = ?"), vals.push(patch.status);
@@ -236,6 +237,11 @@ export class Db {
     if (patch.effort !== undefined) sets.push("effort = ?"), vals.push(patch.effort || (null as unknown as string));
     if (!sets.length) return;
     this.db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`).run(...vals, id);
+  }
+
+  /** Диспетчер перешёл на другой движок: журнал тот же, сессия движка другая. */
+  setEngineSession(id: string, engineSessionId: string): void {
+    this.db.prepare(`UPDATE sessions SET engine_session_id = ? WHERE id = ?`).run(engineSessionId, id);
   }
 
   getSession(id: string): SessionRow | undefined {

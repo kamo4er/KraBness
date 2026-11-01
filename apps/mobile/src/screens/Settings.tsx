@@ -11,6 +11,7 @@ import { C, S } from "../theme.ts";
 import { WakePanel } from "../WakePanel.tsx";
 import { WakeSetupBox } from "../WakeSetupBox.tsx";
 import { RemoteBox } from "../RemoteBox.tsx";
+import { DispatcherSettings } from "../DispatcherSettings.tsx";
 import { EngineSettings } from "../EngineSettings.tsx";
 import { LangSwitch } from "../LangSwitch.tsx";
 import { t, locale } from "@kamharn/client";
@@ -90,6 +91,11 @@ export function Settings({ section }: { section?: SettingsSection }) {
             <Text style={S.h3}>{t("Движки", "Engines")}</Text>
             <View style={st.box}>
               <EngineSettings />
+            </View>
+
+            <Text style={S.h3}>{t("Диспетчер", "Dispatcher")}</Text>
+            <View style={st.box}>
+              <DispatcherSettings />
             </View>
 
             <Text style={S.h3}>{t("Модели", "Models")}</Text>

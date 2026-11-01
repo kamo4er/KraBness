@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync, type ChildProcess } from "node:child_process";
 import type { CustomProvider, EngineInfo, ModelInfo, ModelRef, Part, PermissionMode, PermissionReply, QuestionAnswers, SessionEvent, ToolStatus } from "@kamharn/protocol";
-import type { Engine, EngineSink, PromptFile } from "./types.ts";
+import type { Engine, EngineSink, PermissionRule, PromptFile } from "./types.ts";
 import { killPidTree, killTree, spawn } from "../proc.ts";
 import { readSse } from "../sse.ts";
 import { L } from "../lang.ts";
@@ -31,6 +31,8 @@ export interface OpencodeOptions {
   extraMcp?: () => Record<string, unknown>;
   /** избранные модели по провайдерам: в выборе модели только они (нет списка — все) */
   favorites?: () => Record<string, string[]>;
+  /** сессии, где нельзя ответить «разрешать всегда» */
+  noAlways?: (engineSessionId: string) => boolean;
 }
 
 interface Tracked {
@@ -40,9 +42,12 @@ interface Tracked {
 
 type Json = Record<string, any>;
 
+/** сколько карточка ждёт аргументы вызова; не дождалась — показывается без них */
+const CARD_WAIT_MS = 1500;
+
 // PATCH сессии дописывает правила к старым, а действует последнее совпавшее,
 // поэтому каждый режим задаёт и bash, и edit явно
-const PERMISSION_RULES: Record<PermissionMode, Array<{ permission: string; pattern: string; action: "ask" | "allow" | "deny" }>> = {
+const PERMISSION_RULES: Record<PermissionMode, PermissionRule[]> = {
   manual: [
     { permission: "bash", pattern: "*", action: "ask" },
     { permission: "edit", pattern: "*", action: "ask" },
@@ -56,6 +61,16 @@ const PERMISSION_RULES: Record<PermissionMode, Array<{ permission: string; patte
     { permission: "edit", pattern: "*", action: "allow" },
   ],
 };
+
+/** Что показать на карточке разрешения MCP-инструмента: в permission.asked аргументов нет, только callID вызова. */
+export function callTitle(input: unknown): string {
+  if (!input || typeof input !== "object") return "";
+  const o = input as Json;
+  const main = [o.text, o.url, o.shortcut, o.command, o.name].find((v) => typeof v === "string") as string | undefined;
+  const text = main ?? (Object.keys(o).length ? JSON.stringify(o) : "");
+  // Enter после ввода — это уже отправка
+  return (o.press_enter === true ? `${text} ⏎` : text).slice(0, 300);
+}
 
 function killStale(pidFile: string): void {
   if (!existsSync(pidFile)) return;
@@ -98,6 +113,15 @@ export class OpencodeEngine implements Engine {
   private autoReplied = new Set<string>();
   /** последние вложения, отправленные в сессию (opencode возвращает их без пути) */
   private sentFiles = new Map<string, PromptFile[]>();
+  /** аргументы идущих вызовов инструментов: сессия:callID → input */
+  private calls = new Map<string, unknown>();
+  /** карточки MCP-инструментов, которые ждут аргументов вызова: сессия:callID → показать */
+  private waitingCards = new Map<string, { show: (input?: unknown) => void; timer: NodeJS.Timeout }>();
+  /** чьё следующее сообщение пользователя скрыть и какие уже скрыты */
+  private hideNext = new Set<string>();
+  private hiddenMsgs = new Set<string>();
+  /** размер контекста по последнему ответу модели */
+  private context = new Map<string, number>();
   private startError?: string;
   private log: (msg: string) => void;
 
@@ -295,6 +319,7 @@ export class OpencodeEngine implements Engine {
             ...(offline ? { offline: true } : {}),
             // варианты модели = уровни рассуждений (у каждой модели свои: low/high/max, none/minimal…)
             ...(m.variants && Object.keys(m.variants).length ? { efforts: Object.keys(m.variants) } : {}),
+            ...(m.capabilities?.input?.image ? { vision: true } : {}),
           });
         }
       }
@@ -336,7 +361,7 @@ export class OpencodeEngine implements Engine {
     return up;
   }
 
-  async createSession(o: { directory: string; model: ModelRef; permissionMode: PermissionMode; title?: string; confined?: boolean }): Promise<string> {
+  async createSession(o: { directory: string; model: ModelRef; permissionMode: PermissionMode; title?: string; confined?: boolean; extraRules?: PermissionRule[] }): Promise<string> {
     const s = await this.req(
       "POST",
       "/session",
@@ -344,7 +369,7 @@ export class OpencodeEngine implements Engine {
         ...(o.title ? { title: o.title } : {}),
         model: { id: o.model.modelId, providerID: o.model.providerId },
         // правила режима ниже не трогают external_directory, поэтому запрет переживает смену режима
-        permission: [...PERMISSION_RULES[o.permissionMode], ...(o.confined ? [{ permission: "external_directory", pattern: "*", action: "deny" as const }] : [])],
+        permission: [...PERMISSION_RULES[o.permissionMode], ...(o.extraRules ?? []), ...(o.confined ? [{ permission: "external_directory", pattern: "*", action: "deny" as const }] : [])],
       },
       o.directory,
     );
@@ -362,21 +387,45 @@ export class OpencodeEngine implements Engine {
     return t.directory;
   }
 
-  async prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string; effort?: string }): Promise<void> {
+  /** MCP-серверы только этой папки: у opencode они живут в экземпляре папки, поэтому другие папки их не видят. После перезапуска или dispose их нет — зовём перед каждым сообщением. */
+  async ensureMcp(directory: string, servers: Record<string, Json>): Promise<Record<string, { status: string; error?: string }>> {
+    let st = ((await this.req("GET", "/mcp", undefined, directory)) ?? {}) as Record<string, { status: string; error?: string }>;
+    for (const [name, config] of Object.entries(servers)) {
+      if (st[name]?.status !== "connected") st = await this.req("POST", "/mcp", { name, config }, directory);
+    }
+    return st;
+  }
+
+  async releaseMcp(directory: string, name: string): Promise<void> {
+    await this.req("POST", `/mcp/${encodeURIComponent(name)}/disconnect`, {}, directory);
+  }
+
+  contextTokens(engineSessionId: string): number | undefined {
+    return this.context.get(engineSessionId);
+  }
+
+  async prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string; effort?: string; hidden?: string; hideUser?: boolean }): Promise<void> {
     let text = o.text;
     if (o.files.length) text += `\n\n[${L("Вложения от пользователя", "Attachments from the user")}: ${o.files.map((f) => f.path).join(", ")}]`;
-    const parts: Json[] = [{ type: "text", text }];
+    // synthetic: модель видит и помнит, в ленту не идёт (mapPart)
+    const parts: Json[] = [...(o.hidden ? [{ type: "text", text: o.hidden, synthetic: true }] : []), { type: "text", text }];
     if (o.files.length) this.sentFiles.set(engineSessionId, [...(this.sentFiles.get(engineSessionId) ?? []), ...o.files].slice(-50));
     for (const f of o.files) {
       parts.push({ type: "file", mime: f.mime, filename: f.name, url: pathToFileURL(f.path).href });
     }
-    await this.req(
-      "POST",
-      `/session/${engineSessionId}/prompt_async`,
-      // system — промпт группы: opencode принимает его в каждом сообщении
-      { model: { providerID: o.model.providerId, modelID: o.model.modelId }, parts, ...(o.system ? { system: o.system } : {}), ...(o.effort ? { variant: o.effort } : {}) },
-      this.dir(engineSessionId),
-    );
+    if (o.hideUser) this.hideNext.add(engineSessionId);
+    try {
+      await this.req(
+        "POST",
+        `/session/${engineSessionId}/prompt_async`,
+        // system — промпт группы: opencode принимает его в каждом сообщении
+        { model: { providerID: o.model.providerId, modelID: o.model.modelId }, parts, ...(o.system ? { system: o.system } : {}), ...(o.effort ? { variant: o.effort } : {}) },
+        this.dir(engineSessionId),
+      );
+    } catch (e) {
+      this.hideNext.delete(engineSessionId);
+      throw e;
+    }
   }
 
   /** summarize в v1 отвечает только когда пересказ готов (на бесплатной модели — около минуты): не ждём, ход виден по событиям. */
@@ -438,6 +487,15 @@ export class OpencodeEngine implements Engine {
   forget(engineSessionId: string): void {
     this.tracked.delete(engineSessionId);
     this.sentFiles.delete(engineSessionId);
+    this.hideNext.delete(engineSessionId);
+    this.context.delete(engineSessionId);
+    for (const k of this.calls.keys()) if (k.startsWith(engineSessionId + ":")) this.calls.delete(k);
+    for (const [k, w] of this.waitingCards) {
+      if (k.startsWith(engineSessionId + ":")) {
+        clearTimeout(w.timer);
+        this.waitingCards.delete(k);
+      }
+    }
     for (const k of this.lastEmitted.keys()) if (k.startsWith(engineSessionId + ":")) this.lastEmitted.delete(k);
   }
 
@@ -460,6 +518,10 @@ export class OpencodeEngine implements Engine {
     switch (payload.type) {
       case "message.updated": {
         const info = p.info as Json;
+        if (info.role === "user" && (this.hiddenMsgs.has(info.id) || this.hideNext.delete(sid))) {
+          this.hiddenMsgs.add(info.id);
+          break;
+        }
         const model: ModelRef | undefined = info.providerID
           ? { providerId: info.providerID, modelId: info.modelID }
           : info.model
@@ -481,10 +543,29 @@ export class OpencodeEngine implements Engine {
         if (info.role === "assistant" && info.time?.completed) {
           const u = opencodeRecord(info);
           if (u) this.sink?.usage?.(sid, u);
+          const tk = (info.tokens ?? {}) as Json;
+          // пересказ читал весь старый контекст; после него в контексте только сам пересказ
+          this.context.set(sid, info.summary === true ? Number(tk.output) || 0 : (Number(tk.input) || 0) + (Number(tk.cache?.read) || 0) + (Number(tk.cache?.write) || 0));
         }
         break;
       }
       case "message.part.updated": {
+        if (this.hiddenMsgs.has(p.part.messageID)) break;
+        if (p.part.type === "tool" && p.part.callID) {
+          const k = `${sid}:${p.part.callID}`;
+          const status = p.part.state?.status;
+          if (status === "completed" || status === "error") this.calls.delete(k);
+          // у pending аргументы ещё пустые
+          else if (status === "running") {
+            this.calls.set(k, p.part.state?.input);
+            const w = this.waitingCards.get(k);
+            if (w) {
+              clearTimeout(w.timer);
+              this.waitingCards.delete(k);
+              w.show(p.part.state?.input);
+            }
+          }
+        }
         const part = mapPart(p.part as Json, (fp) => this.fileOf(sid, fp));
         if (part) this.emit(sid, `part:${part.id}`, { type: "part.upserted", messageId: p.part.messageID, part });
         break;
@@ -503,12 +584,26 @@ export class OpencodeEngine implements Engine {
           break;
         }
         const meta = (p.metadata ?? {}) as Json;
-        const title =
-          meta.command ?? meta.filepath ?? meta.filePath ?? (Array.isArray(p.patterns) ? p.patterns.join(" ") : String(p.permission));
-        this.emit(sid, `perm:${p.id}`, {
-          type: "permission.asked",
-          request: { id: p.id, tool: p.permission, title: String(title), detail: meta, canAlways: Array.isArray(p.always) && p.always.length > 0 },
-        });
+        const patterns = Array.isArray(p.patterns) ? p.patterns.join(" ") : "";
+        const show = (input?: unknown) => {
+          // MCP-инструмент: patterns — просто «*»
+          const title = meta.command ?? meta.filepath ?? meta.filePath ?? ((!patterns || patterns === "*") ? callTitle(input) || String(p.permission) : patterns);
+          this.emit(sid, `perm:${p.id}`, {
+            type: "permission.asked",
+            request: { id: p.id, tool: p.permission, title: String(title), detail: input !== undefined ? { ...meta, input } : meta, canAlways: Array.isArray(p.always) && p.always.length > 0 && !this.opts.noAlways?.(sid) },
+          });
+        };
+        const callKey = p.tool?.callID ? `${sid}:${p.tool.callID}` : undefined;
+        const known = callKey ? this.calls.get(callKey) : undefined;
+        // аргументы приходят сразу следом за вопросом: без них человек не увидит, что разрешает
+        if (callKey && known === undefined && patterns === "*" && !Object.keys(meta).length) {
+          const timer = setTimeout(() => {
+            this.waitingCards.delete(callKey);
+            show();
+          }, CARD_WAIT_MS);
+          timer.unref?.();
+          this.waitingCards.set(callKey, { show, timer });
+        } else show(known);
         break;
       }
       case "permission.replied":

@@ -5,6 +5,8 @@ import { client, fmtSize, fmtTime, go, saveQuickPrompts, useHub, useQuickPrompts
 import { WakeSettings } from "./WakeSettings.tsx";
 import { RemoteSettings } from "./RemoteSettings.tsx";
 import { HubAddresses } from "./HubAddresses.tsx";
+import { DispatcherSettings } from "./DispatcherSettings.tsx";
+import { MemorySettings } from "./MemorySettings.tsx";
 import { EngineSettings } from "./EngineSettings.tsx";
 import { LangSwitch } from "./LangSwitch.tsx";
 import { UpdateSettings } from "./Updates.tsx";
@@ -77,6 +79,8 @@ export function Settings({ section }: { section?: SettingsSection }) {
         ) : sec.id === "agents" ? (
           <>
             <EngineSettings />
+            <DispatcherSettings />
+            <MemorySettings />
             <section>
               <h3>{t("Модели", "Models")}</h3>
               <p className="muted">{t("Подключить OpenAI (в т.ч. подписку ChatGPT), OpenRouter, DeepSeek, Gemini, Kimi, GLM и др. или свой сервер (LM Studio, Ollama).", "Connect OpenAI (including a ChatGPT subscription), OpenRouter, DeepSeek, Gemini, Kimi, GLM and more, or your own server (LM Studio, Ollama).")}</p>

@@ -61,8 +61,9 @@ import { checkPublicUrl, probeHub, type RemoteTunnel } from "./remote.ts";
 import type { AutoCheck } from "./checks.ts";
 import type { Orchestrator } from "./orchestrator.ts";
 import { lastAssistantText } from "./orchestrator.ts";
-import { speakableText, talkPart } from "@kamharn/protocol";
+import { speakableText, talkPart, type DispatcherBrains } from "@kamharn/protocol";
 import type { Dispatcher } from "./dispatcher.ts";
+import type { Memory } from "./memory.ts";
 import type { VoiceService } from "./voice.ts";
 
 export interface ServerDeps {
@@ -72,6 +73,7 @@ export interface ServerDeps {
   tasks?: Orchestrator;
   /** Диспетчер: особая сессия-помощник */
   dispatcher?: Dispatcher;
+  memory?: Memory;
   /** голос на ПК */
   voice?: VoiceService;
   /** боты сессий в Telegram */
@@ -393,7 +395,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   // ---------- группы сессий ----------
 
-  type GroupBody = { name?: string; icon?: string; prompt?: string; noUserRules?: boolean; sort?: number };
+  type GroupBody = { name?: string; icon?: string; prompt?: string; noUserRules?: boolean; noMemory?: boolean; sort?: number };
   app.get("/api/groups", async () => sessions.groups());
   app.post<{ Body: GroupBody }>("/api/groups", async (req) => sessions.createGroup({ ...req.body, name: String(req.body?.name ?? "") }));
   app.patch<{ Params: { id: string }; Body: GroupBody }>("/api/groups/:id", async (req) => sessions.updateGroup(req.params.id, req.body ?? {}));
@@ -687,16 +689,48 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     if (!deps.voice) throw new HttpError(404, L("Голос недоступен", "Voice is unavailable"));
     return deps.voice.status();
   });
-  app.put<{ Body: { enabled?: boolean; device?: string; pause?: number } }>("/api/voice", async (req) => {
+  app.put<{ Body: { enabled?: boolean; device?: string; pause?: number; wake?: string } }>("/api/voice", async (req) => {
     if (!deps.voice) throw new HttpError(404, L("Голос недоступен", "Voice is unavailable"));
     const why = deps.voice.unavailable();
     if (req.body?.enabled && why) throw new HttpError(409, why);
+    const wake = req.body?.wake?.trim();
+    if (wake && !/^\p{L}{3,20}$/u.test(wake)) throw new HttpError(400, L("Слово-активатор — одно слово из букв, 3–20 символов", "The wake word must be a single word of 3–20 letters"));
     return deps.voice.set(req.body ?? {});
   });
   app.get("/api/dispatcher", async () => ({ session: deps.dispatcher?.session() ?? null }));
   app.post("/api/dispatcher", async () => {
     if (!deps.dispatcher) throw new HttpError(404, L("Диспетчер недоступен", "The Dispatcher is unavailable"));
     return deps.dispatcher.ensure();
+  });
+  // долгая память: поиск, забывание, настройки
+  const memory = () => {
+    if (!deps.memory?.enabled) throw new HttpError(404, L("Память выключена", "Memory is off"));
+    return deps.memory;
+  };
+  app.get<{ Querystring: { q?: string; day?: string; limit?: string; before?: string; sources?: string; strict?: string } }>("/api/memory/recall", async (req) => {
+    const { q, day, limit, before, sources, strict } = req.query;
+    return memory().recall(String(q ?? "").slice(0, 500), { ...(day ? { day } : {}), ...(limit ? { limit: Number(limit) } : {}), ...(before ? { before: Number(before) } : {}), ...(sources ? { sources: sources.split(",") } : {}), ...(strict ? { strict: true } : {}) });
+  });
+  app.post<{ Body: { q?: string } }>("/api/memory/forget", async (req) => {
+    const q = String(req.body?.q ?? "").trim();
+    if (!q) throw new HttpError(400, L("Что забыть?", "Forget what?"));
+    return { forgotten: await memory().forget(q) };
+  });
+  app.get("/api/memory/brief", async () => memory().brief());
+  app.get<{ Querystring: { limit?: string } }>("/api/memory", async (req) => ({ ...memory().stats(), days: memory().days(Number(req.query.limit ?? 60)) }));
+  // мозги Диспетчера: основной, запасной, состояние
+  app.get("/api/dispatcher/brains", async () => {
+    if (!deps.dispatcher) throw new HttpError(404, L("Диспетчер недоступен", "The Dispatcher is unavailable"));
+    return deps.dispatcher.brains();
+  });
+  app.put<{ Body: Partial<Pick<DispatcherBrains, "primary" | "fallback" | "autoFallback" | "computerOnOpencode">> & { backToPrimary?: boolean } }>("/api/dispatcher/brains", async (req) => {
+    if (!deps.dispatcher) throw new HttpError(404, L("Диспетчер недоступен", "The Dispatcher is unavailable"));
+    return deps.dispatcher.setBrains(req.body ?? {});
+  });
+  // голосом: ответ на вопрос Диспетчера, если он ждёт, иначе новое сообщение (голос на ПК)
+  app.post<{ Body: { text?: string; fileIds?: string[] } }>("/api/dispatcher/say", async (req) => {
+    if (!deps.dispatcher) throw new HttpError(404, L("Диспетчер недоступен", "The Dispatcher is unavailable"));
+    return deps.dispatcher.say(String(req.body?.text ?? ""), Array.isArray(req.body?.fileIds) ? req.body.fileIds.filter((x) => typeof x === "string") : []);
   });
   // поиск по всем чатам
   app.get<{ Querystring: { q?: string; limit?: string } }>("/api/search", async (req) => sessions.search(String(req.query.q ?? "").slice(0, 300), Number(req.query.limit ?? 20) || 20));
@@ -721,7 +755,8 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   app.get<{ Params: { id: string }; Querystring: { after?: string } }>("/api/sessions/:id/reply", async (req) => {
     const s = sessions.get(req.params.id);
     const text = lastAssistantText(sessions.eventsAfter(s.id, Number(req.query.after ?? 0)));
-    return { status: s.status, lastSeq: s.lastSeq, text, speak: text ? speakableText(talkPart(text)) : "" };
+    // Диспетчер повторяет оборвавшийся ход на запасном мозге: для голоса ход ещё не кончился
+    return { status: deps.dispatcher?.rerouting(s.id) ? "busy" : s.status, lastSeq: s.lastSeq, text, speak: text ? speakableText(talkPart(text)) : "" };
   });
   app.post<{ Params: { id: string }; Body: PromptRequest }>("/api/sessions/:id/prompt", async (req) => {
     await sessions.prompt(req.params.id, req.body.text ?? "", req.body.fileIds ?? []);

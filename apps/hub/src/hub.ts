@@ -33,7 +33,8 @@ import { ClaudeLogin } from "./claudeauth.ts";
 import { RemoteTunnel } from "./remote.ts";
 import { AutoCheck } from "./checks.ts";
 import { Orchestrator } from "./orchestrator.ts";
-import { computerCommand, computerExtras, Dispatcher } from "./dispatcher.ts";
+import { computerCommand, computerExtras, Dispatcher, DISPATCHER_ENV } from "./dispatcher.ts";
+import { Memory } from "./memory.ts";
 import { VoiceService, type VoiceDeps } from "./voice.ts";
 import { tunnelSockets } from "./auth.ts";
 import { buildServer } from "./server.ts";
@@ -117,12 +118,33 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   const presence = new Presence();
   // автопроверка создаётся сразу после — уведомления спрашивают её, молчать ли про «готово»
   let autoCheck: AutoCheck | undefined;
-  const notifier = new Notifier(db, push, presence, (sid) => autoCheck?.active(sid) ?? false);
+  const notifier = new Notifier(db, push, presence, (sid) => (autoCheck?.active(sid) ?? false) || dispatcher.quiet(sid));
   autoCheck = new AutoCheck({ sessions, config, notify: (sid, m) => notifier.notify(sid, m), log });
   // задачи: конвейер над сессиями (исполнитель → проверки → ревью → отчёт)
   const tasks = new Orchestrator({ sessions, db, config, autoCheck, notify: (sid, m) => notifier.notify(sid, m), log });
   const voice = new VoiceService({ config, hubUrl: () => localBase, log, ...opts.voice });
-  const dispatcher = new Dispatcher({ sessions, config, tasks, files, ask: (p, m) => (claude ? claude.ask(p, m) : Promise.reject(new Error("claude is off"))) });
+  const memory = new Memory({
+    db,
+    sessions,
+    config,
+    log,
+  });
+  sessions.groupClosing = (id, closed) => memory.setGroupClosed(id, closed);
+  sessions.on("session.deleted", (id) => memory.deleteSession(id));
+  const dispatcher: Dispatcher = new Dispatcher({
+    sessions,
+    config,
+    tasks,
+    files,
+    memory,
+    ask: (p, m) => (claude ? claude.ask(p, m) : Promise.reject(new Error("claude is off"))),
+    notify: (sid, m) => notifier.notify(sid, m),
+    log,
+    // опенкод и адрес MCP появляются после listen, к первому сообщению они уже есть
+    mcpBaseUrl: () => `${localBase}/mcp/${mcpSecret}`,
+    opencodeMcp: () => ocRef,
+    releaseClaude: (esid) => claude?.release(esid),
+  });
   // уведомления в свой Telegram-бот (если настроен): кнопки подтверждения и ответ агенту реплаем
   const telegram = new TelegramBot(
     config,
@@ -133,7 +155,8 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   // боты сессий: свой Telegram-бот на сессию (пишешь — уходит агенту, ответ и файлы — обратно)
   const sessionBots = new SessionBots(config, sessions, files, log);
   sessions.on("event", (e) => notifier.onEvent(e));
-  const autoResume = new AutoResume(sessions, () => sessions.limits, (sid, m) => notifier.notify(sid, m), log);
+  // Диспетчер с запасным мозгом от лимита не ждёт
+  const autoResume = new AutoResume(sessions, () => sessions.limits, (sid, m) => notifier.notify(sid, m), log, undefined, undefined, (s) => dispatcher.handlesLimit(s));
   sessions.on("event", (e) => autoResume.onEvent(e));
 
   // MCP хаба доступен только с localhost и только по секрету текущего запуска
@@ -158,11 +181,11 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
         apiKey: () => config.config.engines.claude.apiKey,
         ...(cfg.engines.claude.args?.length ? { extraArgs: cfg.engines.claude.args } : {}),
         extraMcp: () => mcpServers.forClaude(),
-        // Диспетчеру — управление ПК (Windows-MCP), остальным ничего
+        // Диспетчеру — управление ПК (Windows-MCP) и своё окно автосжатия, остальным ничего
         sessionExtras: (esid) => {
           if (!dispatcher.isScope(esid)) return undefined;
           const uvx = computerCommand(config);
-          return uvx ? computerExtras(uvx) : undefined;
+          return { ...(uvx ? computerExtras(uvx) : {}), env: DISPATCHER_ENV };
         },
         onMcpStatus: (list) => mcpServers.noteClaudeInit(list),
         dataDir: cfg.dataDir,
@@ -210,6 +233,7 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
     autoCheck,
     tasks,
     dispatcher,
+    memory,
     voice,
     notices: (cb) => notifier.subscribe(cb),
     mcpServers,
@@ -239,7 +263,7 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
     secret: mcpSecret,
     files,
     claude,
-    claudeSessionDir: (esid) => sessions.directoryOf("claude", esid),
+    claudeSessionDir: (esid) => sessions.directoryOf("claude", esid) ?? sessions.directoryOf("opencode", esid),
     dispatcher,
   });
 
@@ -329,6 +353,8 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
   telegram.start();
   sessionBots.start();
   voice.start();
+  dispatcher.start();
+  memory.start();
 
   if (cfg.engines.opencode.enabled) {
     const oc = new OpencodeEngine({
@@ -343,6 +369,8 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
       customProviders: () => config.config.customProviders ?? [],
       favorites: () => config.config.modelFavorites ?? {},
       extraMcp: () => mcpServers.forOpencode(),
+      // ответ «всегда» снял бы вопрос у Диспетчера совсем: ввод, запуск программ и команды должны спрашивать каждый раз
+      noAlways: (esid) => dispatcher.isScope(esid),
     });
     ocRef = oc;
     providers = new Providers(oc, config, log);
@@ -395,6 +423,8 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
       telegram.close();
       sessionBots.close();
       voice.close();
+      dispatcher.close();
+      memory.close();
       await previews.close();
       // Клиенты держат WebSocket постоянно, а server.close() ждёт закрытия всех соединений —
       // без принудительного разрыва хаб висел на выключении вечно (и сторож не мог его перезапустить).

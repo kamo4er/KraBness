@@ -50,8 +50,12 @@ def rms(frame: np.ndarray) -> float:
 def split_wake(text: str, word: str) -> tuple[bool, str]:
     """Фраза начинается со слова-активатора (можно «эй, …»; окончание любое: краб, крабик, крабок)?
     Возвращает (да/нет, команда после слова). Слово в середине фразы — не обращение."""
-    stem = re.escape(word.lower().replace("ё", "е")[:4])
-    m = re.match(rf"^\W*(?:(?:эй|ну|слушай|алло)\W+)?{stem}\w{{0,3}}\b\W*", text.lower().replace("ё", "е"))
+    w = word.lower().replace("ё", "е")
+    # короткое имя — основа без конечной гласной и окончание длиннее: Саня → сан: Саня, Сань, Санька, Санечка
+    short = len(w) <= 4 and len(w.rstrip("аеиоуыэюяь")) >= 3
+    stem = re.escape(w.rstrip("аеиоуыэюяь") if short else w[:4])
+    tail = 4 if short else 3
+    m = re.match(rf"^\W*(?:(?:эй|ну|слушай|алло)\W+)?{stem}\w{{0,{tail}}}\b\W*", text.lower().replace("ё", "е"))
     if not m:
         return False, ""
     return True, text[m.end():].strip()
@@ -91,7 +95,8 @@ class Hub:
     def ask(self, text: str) -> tuple[str, int]:
         sid = self.dispatcher()
         seq = self.call("GET", f"/api/sessions/{sid}")["lastSeq"]
-        self.call("POST", f"/api/sessions/{sid}/prompt", {"text": text})
+        # say, а не prompt: если Диспетчер ждёт ответа на вопрос («Отправить?»), «да» уйдёт ответом
+        self.call("POST", "/api/dispatcher/say", {"text": text})
         return sid, seq
 
     def reply(self, sid: str, after: int, timeout: float = 900) -> str:
@@ -262,6 +267,7 @@ class Voice:
                     log(f"continued: {extra}")
                     rest = f"{rest.rstrip(' .…')} {extra}"
         return rest
+
 
     def handle(self, text: str) -> None:
         try:

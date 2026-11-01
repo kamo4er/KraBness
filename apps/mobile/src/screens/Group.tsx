@@ -18,17 +18,18 @@ export function Group({ id }: { id: string }) {
   const [icon, setIcon] = useState("");
   const [prompt, setPrompt] = useState("");
   const [noUserRules, setNoUserRules] = useState(false);
+  const [noMemory, setNoMemory] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    if (g) (setName(g.name), setIcon(g.icon ?? ""), setPrompt(g.prompt ?? ""), setNoUserRules(!!g.noUserRules));
+    if (g) (setName(g.name), setIcon(g.icon ?? ""), setPrompt(g.prompt ?? ""), setNoUserRules(!!g.noUserRules), setNoMemory(!!g.noMemory));
   }, [g?.id]);
 
   const fail = (e: Error) => (setBusy(false), dialog(t("Не получилось", "Failed"), e.message));
   const save = () => {
     setBusy(true);
     const done = () => back();
-    if (isNew) void client?.createGroup({ name, icon, prompt, noUserRules }).then(done, fail);
-    else void client?.updateGroup(id, { name, icon, prompt, noUserRules }).then(done, fail);
+    if (isNew) void client?.createGroup({ name, icon, prompt, noUserRules, noMemory }).then(done, fail);
+    else void client?.updateGroup(id, { name, icon, prompt, noUserRules, noMemory }).then(done, fail);
   };
   const remove = () =>
     dialog(t("Удалить группу?", "Delete the group?"), t(`«${g?.name}» пропадёт, сессии останутся без группы.`, `“${g?.name}” will be removed, its sessions stay ungrouped.`), [
@@ -84,6 +85,13 @@ export function Group({ id }: { id: string }) {
             </Text>
           </View>
           <Switch value={noUserRules} onValueChange={setNoUserRules} />
+        </View>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <View style={{ flex: 1 }}>
+            <Text style={[S.text, { fontWeight: "700" }]}>{t("Закрыта для памяти", "Closed for memory")}</Text>
+            <Text style={S.muted}>{t("Сессии группы не попадают в память, Диспетчер их не видит. Для личного: здоровье, семья.", "The group's sessions don't get into memory, the Dispatcher doesn't see them. For private things: health, family.")}</Text>
+          </View>
+          <Switch value={noMemory} onValueChange={setNoMemory} />
         </View>
         <Btn kind="primary" title={isNew ? t("Создать группу", "Create group") : t("Сохранить", "Save")} busy={busy} disabled={!name.trim()} onPress={save} style={{ marginTop: 12 }} />
         {!isNew ? (

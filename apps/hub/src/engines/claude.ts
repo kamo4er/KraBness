@@ -19,8 +19,8 @@ export interface ClaudeOptions {
   mcpBaseUrl: () => string;
   /** свои MCP-серверы KamHarn (mcpServers для --mcp-config), читается при каждом запуске процесса */
   extraMcp?: () => Record<string, unknown>;
-  /** дополнения для конкретной сессии (Диспетчеру — управление ПК): свои MCP-серверы и инструменты, разрешённые без вопросов */
-  sessionExtras?: (engineSessionId: string) => { mcp?: Record<string, unknown>; allowedTools?: string[] } | undefined;
+  /** дополнения для конкретной сессии (Диспетчеру — управление ПК): свои MCP-серверы, инструменты без вопросов, окружение процесса */
+  sessionExtras?: (engineSessionId: string) => { mcp?: Record<string, unknown>; allowedTools?: string[]; env?: Record<string, string> } | undefined;
   /** состояние MCP-серверов из system/init */
   onMcpStatus?: (servers: unknown) => void;
   /** подключать ли MCP-серверы из пользовательских настроек Claude */
@@ -91,8 +91,29 @@ interface Sess {
   authFailed?: boolean;
   /** после compact_boundary следующим «user» придёт пересказ разговора */
   awaitSummary?: boolean;
+  /** размер контекста по последнему вызову модели (usage в result суммирует все вызовы хода и завышает) */
+  contextTokens?: number;
+  /** идёт тихое сжатие: статус в журнал не пишем, для всех сессия свободна */
+  silentCompact?: boolean;
+  /** во время тихого сжатия пришло сообщение: статус «работает» уже выставлен, его result — следующий */
+  afterSilent?: boolean;
   idleTimer?: NodeJS.Timeout;
   abortTimer?: NodeJS.Timeout;
+}
+
+/** Что изменилось в системном промпте — скрытым началом сообщения. Построчно: заметка в памяти не должна тащить весь промпт заново. */
+export function systemDiff(known: string, system: string): string {
+  const lines = (t: string) => t.split("\n").filter((l) => l.trim());
+  const had = new Set(lines(known));
+  const has = new Set(lines(system));
+  const added = lines(system).filter((l) => !had.has(l));
+  const removed = lines(known).filter((l) => !has.has(l));
+  if (!added.length && !removed.length) return "";
+  const body = [
+    added.length ? L(`Твои системные инструкции обновились, это действует наравне с остальными:\n\n${added.join("\n")}`, `Your system instructions have been updated, this applies along with the rest:\n\n${added.join("\n")}`) : "",
+    removed.length ? L(`Больше не действует:\n\n${removed.join("\n")}`, `No longer applies:\n\n${removed.join("\n")}`) : "",
+  ].filter(Boolean);
+  return `<system-reminder>\n${body.join("\n\n")}\n</system-reminder>\n\n`;
 }
 
 export function resolveClaudeBin(bin?: string): string {
@@ -152,10 +173,20 @@ function resultText(content: unknown): string {
   return s.length > 20_000 ? s.slice(0, 20_000) + L("\n…(обрезано)", "\n…(truncated)") : s;
 }
 
+/** Ошибка хода без входа: по ней Диспетчер уходит на запасной мозг. */
+export function authFailedText(): string {
+  return L(
+    "Claude Code: вход не выполнен или API-ключ не подошёл. Войди в Настройках → Движки → Claude Code.",
+    "Claude Code: not signed in, or the API key didn't work. Sign in at Settings → Engines → Claude Code.",
+  );
+}
+
 export class ClaudeEngine implements Engine {
   readonly id = "claude" as const;
   private sink?: EngineSink;
   private sessions = new Map<string, Sess>();
+  /** какой системный промпт уже знает модель каждой сессии (см. systemUpdate) */
+  private knownSystem?: Record<string, string>;
   private bin: string;
   private log: (m: string) => void;
   private authCache?: { at: number; info: ClaudeAuthInfo & { error?: string } };
@@ -191,6 +222,8 @@ export class ClaudeEngine implements Engine {
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined && k !== "CLAUDE_CODE_ENTRYPOINT") env[k] = v;
     // ожидание ответа на запрос разрешения может длиться долго
     env.MCP_TOOL_TIMEOUT = String(24 * 3600_000);
+    // а это отдельный счётчик тишины: через 300 с без ответа CLI обрывал approve и вопрос пользователю терялся (2.1.302)
+    env.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT = "0";
     const key = this.opts.apiKey?.();
     if (key) env.ANTHROPIC_API_KEY = key;
     return env;
@@ -318,7 +351,8 @@ export class ClaudeEngine implements Engine {
     return {
       id, directory, model, permissionMode, hasHistory,
       buf: "", busy: false, blockIndex: 0,
-      reasoningShown: new Set(), messageCreated: new Map(), tools: new Map(),
+      reasoningShown: new Set(),
+      messageCreated: new Map(), tools: new Map(),
       pending: new Map(), questions: new Map(), alwaysAllow: new Set(),
     };
   }
@@ -357,13 +391,14 @@ export class ClaudeEngine implements Engine {
   private ensureProc(s: Sess): ChildProcess {
     if (s.proc && s.proc.exitCode === null) return s.proc;
     const mcpFile = join(this.opts.dataDir, "claude-mcp", `${s.id}.json`);
-    writeFileSync(mcpFile, JSON.stringify({ mcpServers: { ...this.opts.extraMcp?.(), ...this.opts.sessionExtras?.(s.id)?.mcp, kamharn: { type: "http", url: `${this.opts.mcpBaseUrl()}/${s.id}` } } }));
+    // alwaysLoad: иначе CLI прячет новые MCP-инструменты за ToolSearch — модель видит только имя и тянется к знакомым (open_url Диспетчер так и не позвал)
+    writeFileSync(mcpFile, JSON.stringify({ mcpServers: { ...this.opts.extraMcp?.(), ...this.opts.sessionExtras?.(s.id)?.mcp, kamharn: { type: "http", url: `${this.opts.mcpBaseUrl()}/${s.id}`, alwaysLoad: true } } }));
     const args = this.procArgs(s, mcpFile);
     this.log(`${L("старт процесса", "starting process")} ${s.id.slice(0, 8)} (${s.forkFrom ? "fork " + s.forkFrom.slice(0, 8) : s.hasHistory ? "resume" : "new"}, ${s.model.modelId})`);
     const proc = spawn(this.bin, args, {
       cwd: s.directory,
       // CLAUDE_CODE_ENTRYPOINT от VS Code (хаб запущен из его терминала) пометил бы наши сессии как «из VS Code»
-      env: this.childEnv(),
+      env: { ...this.childEnv(), ...this.opts.sessionExtras?.(s.id)?.env },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -391,6 +426,15 @@ export class ClaudeEngine implements Engine {
       if (s.proc !== proc) return;
       s.proc = undefined;
       this.rejectPending(s);
+      // упало тихое сжатие, а сообщений поверх него нет: для всех сессия и так свободна, контекст остался прежним
+      if (s.silentCompact && !s.afterSilent) {
+        s.silentCompact = false;
+        s.busy = false;
+        this.log(`${L("тихое сжатие оборвалось", "silent compaction aborted")} ${s.id.slice(0, 8)} (${code})`);
+        return;
+      }
+      s.silentCompact = false;
+      s.afterSilent = false;
       if (s.busy) {
         s.busy = false;
         this.sink?.event(s.id, { type: "error", message: L(`Процесс Claude завершился (код ${code})`, `The Claude process exited (code ${code})`) });
@@ -437,6 +481,8 @@ export class ClaudeEngine implements Engine {
     if (s.abortTimer) clearTimeout(s.abortTimer);
     const p = s.proc;
     s.proc = undefined;
+    s.silentCompact = false;
+    s.afterSilent = false;
     if (p) {
       p.stdin?.end();
       killTree(p);
@@ -453,11 +499,47 @@ export class ClaudeEngine implements Engine {
 
   /** /compact в режиме -p работает (проверено на 2.1.302): compact_boundary, затем пересказ, память сохраняется. */
   // system и прочее, с чем запущен процесс: без них prompt() решил бы, что они сменились, и перезапустил процесс без них
-  async compact(engineSessionId: string, o: { model: ModelRef; system?: string; effort?: string; noUserRules?: boolean }): Promise<void> {
-    await this.prompt(engineSessionId, { ...o, text: "/compact", files: [] });
+  async compact(engineSessionId: string, o: { model: ModelRef; system?: string; effort?: string; noUserRules?: boolean; silent?: boolean; instructions?: string }): Promise<void> {
+    const { silent, instructions, ...rest } = o;
+    const text = instructions ? `/compact ${instructions}` : "/compact";
+    await this.prompt(engineSessionId, { ...rest, text, files: [], ...(silent ? { silentCompact: true } : {}) });
   }
 
-  async prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string; effort?: string; noUserRules?: boolean }): Promise<void> {
+  /**
+   * CLI 2.1.302 при --resume молча игнорирует новый --append-system-prompt: модель видит промпт первого запуска,
+   * пока не случится сжатие (tmp/probe/alive-resume-system2.mjs). Память Диспетчера и промпт группы иначе не доходили бы,
+   * поэтому изменённые строки один раз уходят скрытым началом сообщения. Что модель уже знает — в файле: переживает рестарт хаба.
+   */
+  private systemUpdate(s: Sess, system: string, text: string): string {
+    const file = join(this.opts.dataDir, "claude-system.json");
+    if (!this.knownSystem) {
+      try {
+        this.knownSystem = JSON.parse(readFileSync(file, "utf8")) as Record<string, string>;
+      } catch {
+        this.knownSystem = {};
+      }
+    }
+    // команды CLI («/compact») идут как есть: с текстом впереди это уже не команда
+    if (text.startsWith("/")) return "";
+    const known = this.knownSystem[s.id] ?? "";
+    // новую сессию CLI запускает с этим промптом сам; у копии истории — промпт источника
+    const update = !s.hasHistory && !s.forkFrom ? "" : systemDiff(known, system);
+    if (known === system) return update;
+    this.knownSystem[s.id] = system;
+    try {
+      writeFileSync(file, JSON.stringify(this.knownSystem));
+    } catch (e) {
+      this.log(`claude-system.json: ${(e as Error).message}`);
+    }
+    return update;
+  }
+
+  /** Размер контекста по последнему вызову модели; неизвестен, пока в этом запуске хаба не было хода. */
+  contextTokens(engineSessionId: string): number | undefined {
+    return this.sessions.get(engineSessionId)?.contextTokens;
+  }
+
+  async prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string; effort?: string; noUserRules?: boolean; silentCompact?: boolean; hidden?: string }): Promise<void> {
     const s = this.sess(engineSessionId);
     if (s.model.modelId !== o.model.modelId) {
       // смена модели: перезапускаем процесс, транскрипт продолжится с --resume
@@ -478,11 +560,14 @@ export class ClaudeEngine implements Engine {
       s.noUserRules = o.noUserRules || undefined;
       if (s.proc && !s.busy) this.killProc(s);
     }
+    const update = this.systemUpdate(s, o.system ?? "", o.text);
     const proc = this.ensureProc(s);
     if (s.idleTimer) clearTimeout(s.idleTimer);
 
     const content: Json[] = [];
-    let text = o.text;
+    // в ленте — только то, что написал пользователь
+    // команды CLI («/compact») идут как есть: с текстом впереди это уже не команда
+    let text = update + (o.hidden && !o.text.startsWith("/") ? `${o.hidden}\n\n` : "") + o.text;
     const others = o.files.filter((f) => !f.mime.startsWith("image/") || f.size > 5 * 1024 * 1024);
     if (others.length) text += `\n\n[${L("Вложения от пользователя", "Attachments from the user")}: ${others.map((f) => f.path).join(", ")}]`;
     if (text.trim()) content.push({ type: "text", text });
@@ -491,20 +576,28 @@ export class ClaudeEngine implements Engine {
       content.push({ type: "image", source: { type: "base64", media_type: f.mime, data: readFileSync(f.path).toString("base64") } });
     }
 
-    // сообщение пользователя показываем сами: claude его не повторяет
-    const mid = "u_" + randomUUID().replace(/-/g, "").slice(0, 16);
-    this.sink?.event(s.id, { type: "message.upserted", message: { id: mid, role: "user", createdAt: Date.now() } });
-    this.sink?.event(s.id, { type: "part.upserted", messageId: mid, part: { type: "text", id: `${mid}:t`, text: o.text } });
-    for (const f of o.files) {
-      this.sink?.event(s.id, {
-        type: "part.upserted",
-        messageId: mid,
-        part: { type: "file", id: `${mid}:${f.fileId}`, fileId: f.fileId, name: f.name, mime: f.mime, size: f.size },
-      });
-    }
-    if (!s.busy) {
+    if (o.silentCompact) {
+      // ни реплики, ни статуса в журнале: пуш «готово», озвучка и автопроверка срабатывают на статус
+      s.silentCompact = true;
       s.busy = true;
-      this.sink?.event(s.id, { type: "session.updated", patch: { status: "busy" } });
+    } else {
+      // сообщение пользователя показываем сами: claude его не повторяет
+      const mid = "u_" + randomUUID().replace(/-/g, "").slice(0, 16);
+      this.sink?.event(s.id, { type: "message.upserted", message: { id: mid, role: "user", createdAt: Date.now() } });
+      this.sink?.event(s.id, { type: "part.upserted", messageId: mid, part: { type: "text", id: `${mid}:t`, text: o.text } });
+      for (const f of o.files) {
+        this.sink?.event(s.id, {
+          type: "part.upserted",
+          messageId: mid,
+          part: { type: "file", id: `${mid}:${f.fileId}`, fileId: f.fileId, name: f.name, mime: f.mime, size: f.size },
+        });
+      }
+      // сообщение во время тихого сжатия: CLI ответит на него сразу после пересказа, а для клиентов ход начинается сейчас
+      if (!s.busy || (s.silentCompact && !s.afterSilent)) {
+        if (s.silentCompact) s.afterSilent = true;
+        s.busy = true;
+        this.sink?.event(s.id, { type: "session.updated", patch: { status: "busy" } });
+      }
     }
     proc.stdin?.write(JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n");
   }
@@ -522,6 +615,12 @@ export class ClaudeEngine implements Engine {
         this.sink?.event(s.id, { type: "session.updated", patch: { status: "idle" } });
       }
     }, 8000);
+  }
+
+  /** Погасить простаивающий процесс сессии (Диспетчер ушёл на другой движок): вместе с ним уходит его Windows-MCP. */
+  release(engineSessionId: string): void {
+    const s = this.sessions.get(engineSessionId);
+    if (s?.proc && !s.busy) this.killProc(s);
   }
 
   /** Погасить простаивающие процессы: следующее сообщение поднимет их с новыми настройками (--resume). */
@@ -638,6 +737,7 @@ export class ClaudeEngine implements Engine {
     this.sink?.event(sid, { type: "part.upserted", messageId, part });
   }
 
+
   private ensureMessage(s: Sess, msgId: string, model?: string): void {
     if (s.messageCreated.has(msgId)) return;
     const createdAt = Date.now();
@@ -665,8 +765,9 @@ export class ClaudeEngine implements Engine {
           s.blockIndex = ev.index;
           const partId = `${s.msgId}:${ev.index}`;
           const b = ev.content_block as Json;
-          if (b.type === "text") this.part(sid, s.msgId, { type: "text", id: partId, text: b.text ?? "" });
-          else if (b.type === "tool_use") {
+          if (b.type === "text") {
+            this.part(sid, s.msgId, { type: "text", id: partId, text: b.text ?? "" });
+          } else if (b.type === "tool_use") {
             s.tools.set(b.id, { messageId: s.msgId, partId, tool: b.name });
             this.part(sid, s.msgId, { type: "tool", id: partId, tool: b.name, status: "pending" });
           }
@@ -693,6 +794,12 @@ export class ClaudeEngine implements Engine {
           break;
         }
         this.ensureMessage(s, msg.id, msg.model);
+        // служебные реплики CLI приходят с нулями (субагенты сюда не доходят)
+        if (msg.usage) {
+          const u = msg.usage as Json;
+          const tokens = (Number(u.input_tokens) || 0) + (Number(u.cache_read_input_tokens) || 0) + (Number(u.cache_creation_input_tokens) || 0);
+          if (tokens > 0) s.contextTokens = tokens;
+        }
         for (const b of (msg.content ?? []) as Json[]) {
           if (b.type === "tool_use") {
             const t: { messageId: string; partId: string; tool: string; input?: unknown } =
@@ -701,7 +808,8 @@ export class ClaudeEngine implements Engine {
             s.tools.set(b.id, t);
             this.part(sid, t.messageId, { type: "tool", id: t.partId, tool: b.name, status: "running", title: toolTitle(b.name, b.input), input: b.input });
           } else if (b.type === "text") {
-            this.part(sid, msg.id, { type: "text", id: `${msg.id}:${s.msgId === msg.id ? s.blockIndex : 0}`, text: b.text ?? "" });
+            const partId = `${msg.id}:${s.msgId === msg.id ? s.blockIndex : 0}`;
+            this.part(sid, msg.id, { type: "text", id: partId, text: b.text ?? "" });
           } else if (b.type === "thinking" && b.thinking) {
             const partId = `${msg.id}:${s.msgId === msg.id ? s.blockIndex : 0}`;
             s.reasoningShown.add(partId);
@@ -753,11 +861,13 @@ export class ClaudeEngine implements Engine {
           this.part(sid, id, {
             type: "compaction",
             id: `${id}:c`,
-            trigger: meta.trigger === "auto" ? "auto" : "manual",
+            trigger: meta.trigger === "auto" || s.silentCompact ? "auto" : "manual",
             ...(typeof meta.pre_tokens === "number" ? { preTokens: meta.pre_tokens } : {}),
             ...(typeof meta.post_tokens === "number" ? { postTokens: meta.post_tokens } : {}),
           });
           s.awaitSummary = true;
+          // до следующего вызова модели точного размера нет; старый завысил бы его и сжал снова
+          s.contextTokens = typeof meta.post_tokens === "number" ? meta.post_tokens : undefined;
         }
         if (j.subtype === "init" && Array.isArray(j.skills)) this.lastSkills = j.skills.filter((x: unknown) => typeof x === "string");
         if (j.subtype === "init") this.opts.onMcpStatus?.(j.mcp_servers);
@@ -769,22 +879,30 @@ export class ClaudeEngine implements Engine {
         break;
       case "result": {
         if (s.abortTimer) clearTimeout(s.abortTimer);
-        if (s.authFailed) {
+        if (s.silentCompact) {
+          // ошибку тихого сжатия не показываем: лимит здесь запустил бы автопродолжение («Продолжай» без задачи)
           s.authFailed = false;
-          this.sink?.event(sid, {
-            type: "error",
-            message: L(
-              "Claude Code: вход не выполнен или API-ключ не подошёл. Войди в Настройках → Движки → Claude Code.",
-              "Claude Code: not signed in, or the API key didn't work. Sign in at Settings → Engines → Claude Code.",
-            ),
-          });
-        } else if (j.is_error || (j.subtype && j.subtype !== "success")) {
-          const msg = typeof j.result === "string" && j.result ? j.result : Array.isArray(j.errors) ? j.errors.join("; ") : String(j.subtype);
-          this.sink?.event(sid, { type: "error", message: msg });
+          if (j.is_error || (j.subtype && j.subtype !== "success")) this.log(`${L("тихое сжатие не удалось", "silent compaction failed")} ${s.id.slice(0, 8)}: ${String(j.result ?? j.subtype).slice(0, 200)}`);
+          this.usageOf(s, j);
+          s.silentCompact = false;
+          // поверх него пришло сообщение: ход ещё впереди, статус «работает» уже стоит
+          if (s.afterSilent) {
+            s.afterSilent = false;
+            break;
+          }
+          s.busy = false;
+        } else {
+          if (s.authFailed) {
+            s.authFailed = false;
+            this.sink?.event(sid, { type: "error", message: authFailedText() });
+          } else if (j.is_error || (j.subtype && j.subtype !== "success")) {
+            const msg = typeof j.result === "string" && j.result ? j.result : Array.isArray(j.errors) ? j.errors.join("; ") : String(j.subtype);
+            this.sink?.event(sid, { type: "error", message: msg });
+          }
+          this.usageOf(s, j);
+          s.busy = false;
+          this.sink?.event(sid, { type: "session.updated", patch: { status: "idle" } });
         }
-        this.usageOf(s, j);
-        s.busy = false;
-        this.sink?.event(sid, { type: "session.updated", patch: { status: "idle" } });
         const idle = this.opts.idleKillMs ?? 20 * 60_000;
         if (idle > 0) {
           if (s.idleTimer) clearTimeout(s.idleTimer);

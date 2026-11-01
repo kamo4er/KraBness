@@ -79,11 +79,22 @@ test("голос: пауза конца фразы уходит сервису �
   assert.equal(v.status().pause, 2);
   v.set({ pause: 99 });
   assert.equal(v.status().pause, 2, "вне 0,5–5 с — не принимается");
+  assert.equal(v.status().wake, "крабик", "слово по умолчанию");
+  v.set({ wake: " Джарвис " });
+  assert.equal(v.status().wake, "джарвис");
+  for (const bad of ["ф", "две слова", "--hub", "x".repeat(30)]) {
+    v.set({ wake: bad });
+    assert.equal(v.status().wake, "джарвис", `мусор не принимается: ${bad}`);
+  }
   const cmd = (v as unknown as { command(): { args: string[] } | undefined }).command();
   if (cmd) {
     args = cmd.args;
     assert.equal(args[args.indexOf("--wake-pause") + 1], "2");
     assert.equal(args[args.indexOf("--pause") + 1], "2.3");
+    assert.equal(args[args.indexOf("--wake") + 1], "джарвис");
   }
+  v.set({ wake: "" });
+  assert.equal(v.status().wake, "крабик", "пусто — снова по умолчанию");
+  assert.equal(config.config.voice?.wake, undefined);
   v.close();
 });

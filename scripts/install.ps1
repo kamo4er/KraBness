@@ -14,7 +14,7 @@
 #   KRABNESS_ZIP        a local release zip instead of downloading (for testing)
 #   KRABNESS_OPEN       0: don't open the browser at the end
 #   KRABNESS_NODE       1 or 0: install Node.js if it is missing (asked if not set)
-#   KRABNESS_OPENCODE, KRABNESS_CLAUDE, KRABNESS_TAILSCALE   1 or 0: install them if missing (asked if not set)
+#   KRABNESS_OPENCODE, KRABNESS_CLAUDE, KRABNESS_TAILSCALE, KRABNESS_UV   1 or 0: install them if missing (asked if not set)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -55,6 +55,25 @@ function Install-NodeMsi($curl) {
 }
 
 # Tailscale without winget: the official MSI from pkgs.tailscale.com, checked against its .sha256, installed with admin rights
+# uv without winget: the official zip from GitHub, checked against its .sha256, into %USERPROFILE%\.local\bin (no admin rights; the hub looks there)
+function Install-Uv($curl) {
+  $name = 'uv-x86_64-pc-windows-msvc.zip'
+  $url = "https://github.com/astral-sh/uv/releases/latest/download/$name"
+  $tmp = Join-Path $env:TEMP "krabness-uv-$PID"
+  New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+  $zip = Join-Path $tmp $name
+  & $curl -fsSL -o $zip $url
+  if ($LASTEXITCODE -ne 0) { Remove-Item -Recurse -Force $tmp; Warn "Download of uv failed (curl code $LASTEXITCODE)"; return $false }
+  $want = ((& $curl -fsSL "$url.sha256") -split '\s')[0]
+  $have = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+  if (-not $want -or $want.ToLower() -ne $have) { Remove-Item -Recurse -Force $tmp; Warn "Checksum of uv doesn't match, not installing"; return $false }
+  $bin = Join-Path $HOME '.local\bin'
+  New-Item -ItemType Directory -Force -Path $bin | Out-Null
+  Expand-Archive -Force -Path $zip -DestinationPath $bin
+  Remove-Item -Recurse -Force $tmp
+  return (Test-Path (Join-Path $bin 'uvx.exe'))
+}
+
 function Install-TailscaleMsi($curl) {
   $msi = Join-Path $env:TEMP 'tailscale-setup.msi'
   Ok 'downloading Tailscale'
@@ -209,6 +228,13 @@ function Install-KraBness {
     }
   } else { Warn 'Claude Code not found: npm i -g @anthropic-ai/claude-code   then sign in: claude auth login' }
   if (-not $engines) { Warn 'Install at least one of them, KraBness needs an agent to run.' }
+  # uv runs Windows-MCP: without it the Dispatcher just can't control this PC, everything else works
+  $uvHere = (& $app 'uvx') -or (Test-Path (Join-Path $HOME '.local\bin\uvx.exe'))
+  if (-not $uvHere) {
+    Warn 'uv is not installed (optional: the Dispatcher needs it to control this PC)'
+    if ((Ask 'Install uv now?' $env:KRABNESS_UV) -and (Install-Uv $curl)) { $uvHere = $true }
+  }
+  if ($uvHere) { Ok 'uv found' }
   $tsExe = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
   $ts = (Get-Command tailscale -ErrorAction SilentlyContinue) -or (Test-Path $tsExe)
   if (-not $ts) {

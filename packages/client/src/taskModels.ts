@@ -1,6 +1,7 @@
 // Выбор исполнителя и ревьюера задачи: любая модель любого доступного движка.
 // Ключ варианта — «движок|провайдер/модель», одинаковый в вебе и в приложении.
-import type { EngineId, EngineInfo, ModelInfo, ModelRef, NewSessionPrefs } from "@kamharn/protocol";
+import type { BrainDownReason, DispatcherBrains, EngineId, EngineInfo, ModelInfo, ModelRef, NewSessionPrefs } from "@kamharn/protocol";
+import { t } from "./i18n.ts";
 
 export interface EngineModelOption {
   key: string;
@@ -50,4 +51,24 @@ export function defaultTaskModels(engines: EngineInfo[] | undefined, prefs?: New
   const worker = pick("claude") ?? pick("opencode");
   const review = pick("opencode") ?? (worker ? pick(parseModelKey(worker)!.engine) : undefined);
   return { ...(worker ? { worker } : {}), ...(review ? { review } : {}) };
+}
+
+/** Модели, на которых может работать Диспетчер: с инструментами и запущенные. */
+export const brainOptions = (engines: EngineInfo[] | undefined): EngineModelOption[] => modelOptions(engines).filter((o) => o.model.tools !== false && !o.model.offline);
+
+/** Почему сейчас отвечает запасной мозг. */
+export function brainDownText(reason?: BrainDownReason): string {
+  if (reason === "limit") return t("Claude упёрся в лимит", "Claude hit its limit");
+  if (reason === "auth") return t("в Claude Code нет входа", "Claude Code is not signed in");
+  return t("основной недоступен", "the main one is unavailable");
+}
+
+/** Что сказать про управление ПК на этой машине. */
+export function computerHint(c: DispatcherBrains["computer"]): string {
+  if (c.reason === "no-uvx") return t("Нужен uv: выполни в терминале winget install astral-sh.uv и открой настройки снова.", "Needs uv: run winget install astral-sh.uv in a terminal and open the settings again.");
+  if (c.reason === "not-windows") return t("Управление ПК работает только на Windows.", "PC control works on Windows only.");
+  if (c.reason === "off") return t("Управление ПК выключено в конфиге хаба.", "PC control is turned off in the hub config.");
+  if (c.warm === "running") return t("Готовлю управление ПК: первый раз качается Python и пакеты, это несколько минут.", "Preparing PC control: Python and packages download the first time, it takes a few minutes.");
+  if (c.warm === "failed") return t("Не удалось подготовить управление ПК. Проверь сеть и попробуй выключить и включить снова.", "Couldn't prepare PC control. Check the network and try turning it off and on again.");
+  return "";
 }

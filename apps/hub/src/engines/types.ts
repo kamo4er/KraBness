@@ -19,6 +19,13 @@ export interface PromptFile {
   size: number;
 }
 
+/** Правило разрешений opencode: действует последнее совпавшее. */
+export interface PermissionRule {
+  permission: string;
+  pattern: string;
+  action: "ask" | "allow" | "deny";
+}
+
 export interface Engine {
   readonly id: EngineId;
   start(sink: EngineSink): Promise<void>;
@@ -34,12 +41,15 @@ export interface Engine {
     forkFrom?: string;
     /** агент работает только в своей папке (шаг задачи в копии проекта): за её пределы — отказ без вопроса */
     confined?: boolean;
+    /** свои правила разрешений поверх правил режима (opencode) */
+    extraRules?: PermissionRule[];
   }): Promise<string>;
   /** Восстановление связи с уже существующей сессией (после перезапуска хаба). */
   attach(engineSessionId: string, o: { directory: string; model: ModelRef; permissionMode: PermissionMode; hasHistory: boolean }): void;
   /** system — системный промпт группы сессии (добавляется к стандартному) */
   /** effort — уровень рассуждений (claude: --effort, opencode: variant) */
-  prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string; effort?: string; noUserRules?: boolean }): Promise<void>;
+  /** hidden — текст только для модели, в ленте его нет; hideUser — само сообщение в ленте не показывать (уже показано: повтор оборвавшегося хода) */
+  prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string; effort?: string; noUserRules?: boolean; hidden?: string; hideUser?: boolean }): Promise<void>;
   abort(engineSessionId: string): Promise<void>;
   replyPermission(engineSessionId: string, requestId: string, reply: PermissionReply): Promise<void>;
   /** Ответ на вопрос агента (null — пользователь отказался отвечать). */
@@ -51,7 +61,10 @@ export interface Engine {
   /** Скиллы, о которых движок знает по последнему запуску (claude: system:init). */
   slashSkills?(): string[];
   /** Сжать контекст агента (пересказ вместо истории); ход идёт как обычный, итог — часть compaction в ленте. */
-  compact?(engineSessionId: string, o: { model: ModelRef; system?: string; effort?: string; noUserRules?: boolean }): Promise<void>;
+  /** silent — без реплики и статуса в журнале (только отметка и пересказ); instructions — что обязательно сохранить */
+  compact?(engineSessionId: string, o: { model: ModelRef; system?: string; effort?: string; noUserRules?: boolean; silent?: boolean; instructions?: string }): Promise<void>;
+  /** Размер контекста по последнему вызову модели. */
+  contextTokens?(engineSessionId: string): number | undefined;
   /** Сессию удалили в хабе: освободить ресурсы (процессы, подписки). */
   forget(engineSessionId: string): void;
 }

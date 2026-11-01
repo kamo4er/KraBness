@@ -1,5 +1,6 @@
 """Сквозная проверка голоса без микрофона: фразы с «Крабик» и без (Piper) -> main.py --feed --mute
--> поддельный хаб получает команду Диспетчеру, отдаёт ответ -> main.py «говорит» его. uv run python test_pipeline.py"""
+-> поддельный хаб получает команду Диспетчеру, отдаёт ответ -> main.py «говорит» его.
+uv run python test_pipeline.py [слово]"""
 import io
 import json
 import subprocess
@@ -53,10 +54,10 @@ class FakeHub(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
         if self.path == "/api/dispatcher":
             return self.send({"id": "ks_d"})
-        if self.path == "/api/sessions/ks_d/prompt":
+        if self.path == "/api/dispatcher/say":
             got.append(body["text"])
             calls["since"] = 0
-            return self.send({})
+            return self.send({"sessionId": "ks_d"})
         self.send_error(404)
 
     def do_GET(self):
@@ -72,8 +73,12 @@ class FakeHub(BaseHTTPRequestHandler):
 def main() -> None:
     silence = lambda s: np.zeros(int(16000 * s), dtype=np.float32)
     ru = lambda t: say("ru_RU-irina-medium", t)
+    # слово-активатор: uv run python test_pipeline.py [джарвис]
+    wake = sys.argv[1] if len(sys.argv) > 1 else "крабик"
+    W = wake.capitalize()
+    stem = wake[:4] if len(wake) > 4 else wake[:3]  # «краб» (не «кра»: оно есть в «экран»), «джар»
     # посторонняя фраза; команда одной фразой; одно слово, пауза, команда; команда с паузой 1 с посередине
-    audio = np.concatenate([silence(0.5), ru("Сегодня хорошая погода, пойдём гулять."), silence(4), ru("Крабик, открой блокнот и напиши привет."), silence(4), ru("Крабик."), silence(2.0), ru("Покажи экран."), silence(4), ru("Крабик, открой телеграм"), silence(1.0), ru("и найди последнее сообщение."), silence(0.5)])
+    audio = np.concatenate([silence(0.5), ru("Сегодня хорошая погода, пойдём гулять."), silence(4), ru(f"{W}, открой блокнот и напиши привет."), silence(4), ru(f"{W}."), silence(2.0), ru("Покажи экран."), silence(4), ru(f"{W}, открой телеграм"), silence(1.0), ru("и найди последнее сообщение."), silence(0.5)])
     feed = HERE / "test_feed.wav"
     with wave.open(str(feed), "wb") as w:
         w.setnchannels(1)
@@ -84,14 +89,14 @@ def main() -> None:
     srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeHub)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     hub = f"http://127.0.0.1:{srv.server_address[1]}"
-    out = subprocess.run([sys.executable, str(HERE / "main.py"), "--hub", hub, "--feed", str(feed), "--mute"], capture_output=True, text=True, encoding="utf-8", timeout=300)
+    out = subprocess.run([sys.executable, str(HERE / "main.py"), "--hub", hub, "--feed", str(feed), "--mute", "--wake", wake], capture_output=True, text=True, encoding="utf-8", timeout=300)
     srv.shutdown()
     log = out.stdout + out.stderr
     print(log[-1500:])
     checks = [
         ("посторонняя фраза не запустила", not any("погода" in g.lower() for g in got) and "погода" not in log.lower()),
-        ("команда одной фразой", any("блокнот" in g.lower() and "привет" in g.lower() and "краб" not in g.lower() for g in got)),
-        ("слово, пауза, команда", any("экран" in g.lower() and "краб" not in g.lower() for g in got)),
+        ("команда одной фразой", any("блокнот" in g.lower() and "привет" in g.lower() and stem not in g.lower() for g in got)),
+        ("слово, пауза, команда", any("экран" in g.lower() and stem not in g.lower() for g in got)),
         ("пауза посреди фразы не порвала команду", any("телеграм" in g.lower() and "сообщение" in g.lower() for g in got)),
         ("ушло ровно три команды", len(got) == 3),
         ("дождался конца хода", calls["reply"] >= 3),

@@ -13,11 +13,12 @@ export function Group({ id }: { id: string }) {
   const [icon, setIcon] = useState("");
   const [prompt, setPrompt] = useState("");
   const [noUserRules, setNoUserRules] = useState(false);
+  const [noMemory, setNoMemory] = useState(false);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   // форма заполняется, когда группа пришла с хаба
   useEffect(() => {
-    if (g) (setName(g.name), setIcon(g.icon ?? ""), setPrompt(g.prompt ?? ""), setNoUserRules(!!g.noUserRules));
+    if (g) (setName(g.name), setIcon(g.icon ?? ""), setPrompt(g.prompt ?? ""), setNoUserRules(!!g.noUserRules), setNoMemory(!!g.noMemory));
   }, [g?.id]);
 
   if (!isNew && !g) return <div className="empty">{state.conn === "online" ? t("Группа не найдена.", "Group not found.") : t("Загрузка…", "Loading…")}</div>;
@@ -27,8 +28,8 @@ export function Group({ id }: { id: string }) {
     setBusy(true);
     setError(undefined);
     try {
-      if (isNew) await client.createGroup({ name, icon, prompt, noUserRules });
-      else await client.updateGroup(id, { name, icon, prompt, noUserRules });
+      if (isNew) await client.createGroup({ name, icon, prompt, noUserRules, noMemory });
+      else await client.updateGroup(id, { name, icon, prompt, noUserRules, noMemory });
       go({ page: "home" });
     } catch (e) {
       setError((e as Error).message);
@@ -84,6 +85,18 @@ export function Group({ id }: { id: string }) {
             {t(
               "Claude не читает ~/.claude/CLAUDE.md и ~/.claude/rules: твои правила про код, обращение и стиль. Для чатов не про код (врач, дом). Нужное из них допиши в промпт выше.",
               "Claude skips ~/.claude/CLAUDE.md and ~/.claude/rules: your rules about coding, how to address you, style. For chats that aren't about code. Put what you need from them into the prompt above.",
+            )}
+          </p>
+        </section>
+        <section>
+          <label className="row">
+            <input type="checkbox" checked={noMemory} onChange={(e) => setNoMemory(e.target.checked)} />
+            <b>{t("Закрыта для памяти", "Closed for memory")}</b>
+          </label>
+          <p className="muted">
+            {t(
+              "Сессии группы не попадают в память и дневник, а Диспетчер не видит их и не может туда писать. Для личного и чужого: здоровье, семья.",
+              "The group's sessions don't get into memory and the diary, and the Dispatcher neither sees them nor can write there. For private things and other people's: health, family.",
             )}
           </p>
         </section>

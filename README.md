@@ -40,19 +40,108 @@ KraBness is a small hub that runs on your Windows PC. It starts AI coding agents
   - It also works with your own server (LM Studio, Ollama, vLLM) and with free models.
   - Claude Code uses your Claude subscription, through the official CLI only.
 - **Project view without the agent**: git diff, file browser, editing text files by hand, a mini terminal.
+- **The Dispatcher**: a personal assistant that runs your sessions and can control the PC, on Claude or any other model with tools ([below](#the-dispatcher)).
+- **Tasks**: give a goal, get back a reviewed change that waits for your decision, with a report on how checks and review went ([below](#tasks-and-auto-check)).
+- **Live pages in the chat** and **layout comments** right on your dev server's page ([below](#live-pages-and-layout-comments)).
+- **Search over all chats and a token usage page** ([below](#search-and-token-usage)).
 - **Handy extras**:
   - Claude limits in %, with auto-continue after a limit resets;
   - a separate git branch per session;
   - session groups with a shared prompt;
   - your own MCP servers and skills for both engines;
   - continuing existing Claude Code sessions;
-  - a dev-server preview on the phone;
-  - a screenshot of the PC screen;
+  - a separate Telegram bot for a session: you and people you invite write to the agent from Telegram, files included;
+  - `@` in the message box to pick a project file, and file paths in answers that open the file;
+  - a button to compact the context, and a thinking level per session;
+  - a screenshot of the PC screen (needs ffmpeg: `winget install Gyan.FFmpeg`);
   - voice input and read-aloud;
   - putting the PC to sleep and waking it up.
 - **Notifications**: from the app itself or via a Telegram bot (with SOCKS5/HTTP proxy support).
 - **Updates in one tap.** The hub checks GitHub once a day, installs a new version and rolls back if it fails.
 - **English and Russian** interface, following the system language by default.
+
+<p align="center">
+  <img src="docs/screenshots/web-settings.png" width="68%" alt="Settings split into sections">
+</p>
+
+## The Dispatcher
+
+A pinned chat with an assistant that works for you rather than on one project. Call it from the phone, the browser or by voice.
+
+<p align="center">
+  <img src="docs/screenshots/web-dispatcher.png" width="68%" alt="The Dispatcher checks the sessions, starts a new one and reports back">
+  <img src="docs/screenshots/phone-dispatcher.png" width="26%" alt="The Dispatcher on the phone asks before sending">
+</p>
+
+- **It hands out work.** It starts coding sessions and tasks, watches them, answers their questions when the answer is obvious and reports back. It won't approve commands that look irreversible (push, deleting) by itself: those wait for your "yes". This is a pattern check plus an instruction to the model, not a guarantee.
+- **It can control the PC (Windows).** Screenshots, mouse, keyboard, opening sites. Needs [uv](https://docs.astral.sh/uv/) (the installer offers it); to send you a screenshot in the chat it also needs ffmpeg.
+- **You can talk to it.**
+  - On the PC: say the wake word and the command, and the start of the answer plays through the speakers. Recognition (Whisper) and speech (Piper) run locally, and phrases without the wake word go nowhere. Settings → Computer → Voice on the PC. Needs uv and downloads its models on first start; an NVIDIA GPU makes it fast, without one it falls back to the CPU. **Russian only for now.**
+  - On the phone: press the microphone, speak, press stop. In Talk mode the text goes out by itself and the first paragraph of the answer is read aloud. It is on by default for the Dispatcher, and any session has it in the ⋯ menu. The phone needs a speech recognition service.
+- **It remembers.** Two plain files in its folder hold what it should always know. On top of that, a long memory in the hub's database on this PC keeps what was said in all your chats, including earlier ones, day by day, so you can ask what was done on a given day. What it recalls goes to the Dispatcher's model like any other context. Close a group for memory in its settings. Look things up or forget matching records in Settings → Agents → Memory in the web UI (up to five per press; the diary and the chats themselves stay). It searches by words out of the box; a diary and search by meaning need a local OpenAI-compatible model (`memory.writer` and `memory.embeddings` in the config). In LM Studio the model must already be loaded.
+- **Any brain, one chat.** Settings → Agents → Dispatcher: the main model and a fallback. No Claude? It works on any opencode model with tools from the start. With Claude as the main one and a fallback chosen, it moves to the fallback when Claude hits its limit or isn't signed in, and comes back afterwards.
+
+<p align="center">
+  <img src="docs/screenshots/web-dispatcher-pc.png" width="68%" alt="The Dispatcher fills in a form on the PC, shows a screenshot and asks before sending">
+</p>
+<p align="center">
+  <img src="docs/screenshots/web-brains.png" width="48%" alt="Choosing the main and the fallback model">
+  <img src="docs/screenshots/web-voice.png" width="48%" alt="Voice on the PC settings">
+</p>
+
+**What to know about PC control on opencode models.** It is off by default, turn it on in the same settings. Claude has a safety classifier, opencode models don't:
+
+- screenshots and the mouse go without asking;
+- typing, keys, launching programs and commands ask every time, with what exactly on the card;
+- a mouse click on "Pay" or "Send" does **not** ask: there is only an instruction to the model to ask first, and how well it follows that depends on the model.
+
+The model needs vision, otherwise it works without PC control. Your conversation and screenshots go to that model's provider. Tested on Kimi k3.1-pro; other providers go through the same code but weren't tried live.
+
+## Tasks and auto-check
+
+Give a goal and a project, and the hub runs the work from start to report:
+
+1. An agent works in a separate copy of the project, on its own branch.
+2. If check commands are saved for the project, the hub runs them and a failure goes back to the agent. Save them once with the ✓ button in a chat (it suggests tests, typecheck and lint from the project files). Without them this step is skipped and the report says "not configured".
+3. A review model (by default on opencode, otherwise on the worker's engine) reviews the diff, the agent fixes the remarks, up to two review rounds.
+4. You get a notification and a report: **merge** into the main branch as one commit, ask for **another round** with a comment, or **discard**.
+
+The hub merges nothing into the main branch without your decision. Failed checks or open remarks don't stop the task from reaching you: the report says how they went. If the agent has a question, the task shows it and waits for you.
+
+<p align="center">
+  <img src="docs/screenshots/web-task.png" width="68%" alt="A task report: steps, checks, changed files and the decision buttons">
+  <img src="docs/screenshots/phone-tasks.png" width="26%" alt="Tasks on the phone: queued, running and ready">
+</p>
+
+- **Queue.** Tasks start as slots free up (two at once by default), or at night: "Start at night" waits until 02:00.
+- **Any engine.** Pick the models for the work and for the review. By default the work goes to Claude if you're signed in, the review to opencode.
+- **Auto-check in any session.** The ✓ button in the chat header (⋯ → Auto-check in the app) turns on checks after each agent turn. A red check goes to the agent, up to three attempts, and stops early if the same error comes back.
+- **Hit a Claude limit?** The session waits for the reset and continues by itself. "Don't wait" hands the work over to an opencode model.
+
+<p align="center">
+  <img src="docs/screenshots/web-check.png" width="68%" alt="The auto-check finds a failing test, the agent fixes it, the check turns green">
+</p>
+
+## Live pages and layout comments
+
+- **Live pages.** An ```` ```html ```` block in an agent's answer runs as a page right in the chat: 3D, charts, small demos, full screen with one tap. It runs in a sandbox with no access to the hub, your token or the chat. An `.html` file in the project view has a Run button.
+- **Dev-server preview.** Open a port of your dev server on the phone or in another browser through the hub.
+- **Layout comments.** Open the preview in comment mode, tap an element and write what's wrong. The agent gets your text with the element's selector, a piece of its HTML, its size and styles, and a screenshot.
+
+<p align="center">
+  <img src="docs/screenshots/web-artifact.png" width="48%" alt="A live 3D scene and a chart in the chat">
+  <img src="docs/screenshots/web-comments.png" width="48%" alt="The layout comments panel over a page">
+</p>
+
+## Search and token usage
+
+- **Search over all chats**, in the web UI and in the app. It matches word beginnings in what you and the agents wrote, and a click opens the session.
+- **Token usage** (Settings → Token usage): new tokens, cache reads and the cost at API prices, as a calendar heat map, by day, by model and by session. On a subscription the cost is only a reference.
+
+<p align="center">
+  <img src="docs/screenshots/web-search.png" width="48%" alt="Search over all chats">
+  <img src="docs/screenshots/web-usage.png" width="48%" alt="The token usage page with a calendar heat map">
+</p>
 
 ## Requirements
 
@@ -62,6 +151,7 @@ KraBness is a small hub that runs on your Windows PC. It starts AI coding agents
   - **opencode**: `npm i -g opencode-ai`. It runs free and local models out of the box.
   - **Claude Code**: `npm i -g @anthropic-ai/claude-code`. Sign in once with your own account: in KraBness (Settings → Engines → Sign in on the PC) or with `claude auth login` in a terminal. A Claude subscription works, and so does an Anthropic API key (pay as you go, Settings → Engines).
 - [Tailscale](https://tailscale.com/download) on the PC and on the phone, signed in to the same account. It gives the phone a private, encrypted path to your PC with no port forwarding.
+- Optional: [uv](https://docs.astral.sh/uv/) for PC control and voice on the PC (the installer offers it).
 
 ## Install
 
@@ -74,7 +164,7 @@ irm https://github.com/kamo4er/KraBness/releases/latest/download/install.ps1 | i
 The installer:
 - checks Node.js and offers to install it if it is missing;
 - downloads the latest release to `%USERPROFILE%\KraBness`, then installs the dependencies and builds the web UI;
-- offers to install what is missing: opencode, Claude Code, Tailscale;
+- offers to install what is missing: opencode, Claude Code, uv (optional), Tailscale;
 - asks whether to add a firewall rule for Tailscale and whether to start KraBness with Windows;
 - starts the hub and opens http://127.0.0.1:7420.
 
@@ -222,6 +312,7 @@ Synology: Control Panel → Task Scheduler → Create → Triggered Task, event 
 - the engines (`engines.claude.userMcp: true` also loads the MCP servers from your Claude Code settings);
 - the language (`language`: `auto`, `en` or `ru`);
 - updates (`updates.auto: false` turns off the daily check);
+- the Dispatcher's long memory (`memory.enabled: false` turns it off; `memory.writer` and `memory.embeddings` are the local models for the diary and search by meaning);
 - remote access via your own server (`remote`; the hub's tunnel key is `config/remote_ed25519`);
 - addresses behind your own reverse proxy, for example a NAS on a public IP (`publicUrls`, they go into the pairing QR). Add the PC's home address to `listen` and run `scripts\firewall-lan.ps1 -Proxy <proxy IP>` as administrator: the hub port then accepts only the proxy.
 

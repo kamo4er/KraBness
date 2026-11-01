@@ -22,6 +22,8 @@ export interface ModelInfo extends ModelRef {
   offline?: boolean;
   /** уровни рассуждений, как их называет движок (claude: --effort, opencode: варианты модели); нет — модель их не знает */
   efforts?: string[];
+  /** модель видит картинки (без этого у Диспетчера нет управления ПК: снимки ей не прочитать) */
+  vision?: boolean;
 }
 
 /** Что показывать в «Новой сессии»: включённые движки и что выбрано по умолчанию (настройки хаба). */
@@ -96,6 +98,8 @@ export interface SessionGroup {
   prompt?: string;
   /** Claude без глобальных правил пользователя (~/.claude/CLAUDE.md и ~/.claude/rules) — для чатов не про код */
   noUserRules?: boolean;
+  /** закрыта для памяти: сессии группы не запоминаются, Диспетчер их не читает */
+  noMemory?: boolean;
   sort: number;
 }
 
@@ -190,7 +194,7 @@ export type QuestionAnswers = string[][] | null;
 
 /** Сохраняемые события сессии (получают seq и попадают в replay). */
 export type SessionEvent =
-  | { type: "session.updated"; patch: Partial<Pick<SessionInfo, "title" | "status" | "model" | "permissionMode" | "resumeAt" | "groupId" | "autoCheck" | "effort">> }
+  | { type: "session.updated"; patch: Partial<Pick<SessionInfo, "engine" | "title" | "status" | "model" | "permissionMode" | "resumeAt" | "groupId" | "autoCheck" | "effort">> }
   | { type: "message.upserted"; message: MessageInfo }
   | { type: "part.upserted"; messageId: string; part: Part }
   | { type: "permission.asked"; request: PermissionRequest }
@@ -355,6 +359,42 @@ export interface ClaudeLimits {
   /** allowed | allowed_warning | rejected … */
   status?: string;
   updatedAt: number;
+}
+
+/** Мозг Диспетчера: на каком движке и какой модели он работает. */
+export interface BrainRef {
+  engine: EngineId;
+  model: ModelRef;
+  /** уровень рассуждений; нет — по умолчанию модели */
+  effort?: string;
+}
+
+/** Почему основной мозг Диспетчера не отвечает: лимит подписки, нет входа, движок или модель недоступны. */
+export type BrainDownReason = "limit" | "auth" | "unavailable";
+
+/** Настройки и состояние мозгов Диспетчера (GET/PUT /api/dispatcher/brains). */
+export interface DispatcherBrains {
+  primary: BrainRef;
+  /** запасной выбирает сам человек: снимки экрана уйдут этому поставщику */
+  fallback: BrainRef | null;
+  /** сам переключаться на запасной, когда Claude недоступен, и обратно */
+  autoFallback: boolean;
+  /** управление ПК у мозга на opencode: там нет классификатора Claude */
+  computerOnOpencode: boolean;
+  /** кто отвечает сейчас */
+  active: "primary" | "fallback";
+  /** почему сейчас запасной */
+  reason?: BrainDownReason;
+  /** когда основной снова сможет отвечать (мс) */
+  until?: number;
+  /** управление ПК на этой машине */
+  computer: {
+    available: boolean;
+    /** off — выключено в конфиге, not-windows, no-uvx — не установлен uv */
+    reason?: "off" | "not-windows" | "no-uvx";
+    /** первый запуск Windows-MCP качает Python и пакеты: идёт ли подготовка */
+    warm?: "running" | "done" | "failed";
+  };
 }
 
 /** Уведомление о событии сессии: уходит в FCM, в приложения по WebSocket и в Telegram. */
@@ -787,6 +827,7 @@ export interface SessionBotInfo {
 }
 export * from "./speech.ts";
 
+
 /** Голос на ПК (apps/hub/src/voice.ts, voice/main.py): слово-активатор → Whisper → Диспетчер → ответ вслух. */
 export interface VoiceStatus {
   enabled: boolean;
@@ -799,9 +840,55 @@ export interface VoiceStatus {
   device: string;
   /** пауза конца фразы, с */
   pause: number;
+  /** слово-активатор в начале фразы («Крабик», «Джарвис»…) */
+  wake: string;
 }
 
 /** Найденное поиском по всем чатам (`GET /api/search`). */
+/** Что нашлось в долгой памяти (apps/hub/src/memory.ts). */
+export interface MemoryHit {
+  id: number;
+  kind: "chat" | "diary" | "fact" | "place";
+  /** diary, session:<id> */
+  source: string;
+  /** откуда понятными словами */
+  where: string;
+  role?: string;
+  day: string;
+  ts: number;
+  text: string;
+  score: number;
+}
+
+export interface MemoryRecall {
+  /** дни, о которых спрашивают («вчера», «3 октября») */
+  days: string[];
+  diaries: Array<{ day: string; text: string }>;
+  items: MemoryHit[];
+}
+
+/** Настройки «Память»: сколько помнит и чем. */
+export interface MemoryInfo {
+  items: number;
+  withVector: number;
+  diaries: number;
+  facts: number;
+  places: number;
+  lastDiary?: string;
+  writer: boolean;
+  vectors: boolean;
+  closedGroups: string[];
+  enabled: boolean;
+  days: Array<{ day: string; text: string }>;
+}
+
+/** Что знать постоянно: последний день и накопленное. */
+export interface MemoryBrief {
+  lastDay?: { day: string; text: string };
+  facts: string[];
+  places: string[];
+}
+
 export interface SearchHit {
   sessionId: string;
   title: string;

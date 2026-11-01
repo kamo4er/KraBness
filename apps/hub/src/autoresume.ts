@@ -1,6 +1,6 @@
 // Автопродолжение после лимита подписки Claude: сессия упёрлась в лимит — ждём сброса и сами пишем «Продолжай».
 // Время ожидания хранится в сессии (resumeAt), поэтому переживает рестарт хаба и видно в клиентах.
-import type { ClaudeLimits, StoredEvent } from "@kamharn/protocol";
+import type { ClaudeLimits, SessionInfo, StoredEvent } from "@kamharn/protocol";
 import type { SessionManager } from "./sessions.ts";
 import { L } from "./lang.ts";
 
@@ -52,6 +52,8 @@ export class AutoResume {
     private log: (m: string) => void = () => {},
     private now: () => number = Date.now,
     private marginMs = MARGIN_MS,
+    /** эту сессию ведёт кто-то другой (Диспетчер перейдёт на запасной мозг), «Продолжай» запустил бы второго агента */
+    private skip: (s: SessionInfo) => boolean = () => false,
   ) {}
 
   /** после старта хаба: поднять таймеры сессий, которые ждали лимит */
@@ -63,7 +65,7 @@ export class AutoResume {
     const ev = e.event;
     if (ev.type === "error" && isLimitError(ev.message)) {
       const s = this.sessions.get(e.sessionId);
-      if (s.engine !== "claude") return;
+      if (s.engine !== "claude" || this.skip(s)) return;
       const at = resumeTime(ev.message, this.limits(), this.now(), this.marginMs);
       this.sessions.setResumeAt(s.id, at);
       this.log(L(`[hub] лимит в «${s.title}»: продолжу в ${new Date(at).toLocaleTimeString("ru")}`, `[hub] limit in “${s.title}”: will continue at ${new Date(at).toLocaleTimeString("en-US")}`));

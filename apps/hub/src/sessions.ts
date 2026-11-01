@@ -27,7 +27,7 @@ import type {
   UsageTotals,
 } from "@kamharn/protocol";
 import { publicSession, type Db, type SessionRow } from "./db.ts";
-import type { Engine, PromptFile } from "./engines/types.ts";
+import type { Engine, PermissionRule, PromptFile } from "./engines/types.ts";
 import type { ConfigStore } from "./config.ts";
 import { FILE_MARKER, type FileStore } from "./files.ts";
 import { findTranscript, listTranscripts, transcriptHistory } from "./engines/claude-transcript.ts";
@@ -46,7 +46,7 @@ export const artifactsHint = (): string =>
     "The KraBness client shows a ```html block with a whole page to the user as a live card right in the chat: use it for 3D (three.js from a CDN), charts, interactive demos. Make such a page self-contained, in one block. Diagrams: a ```mermaid block.",
   );
 
-type GroupPatch = { name?: string; icon?: string; prompt?: string; noUserRules?: boolean };
+type GroupPatch = { name?: string; icon?: string; prompt?: string; noUserRules?: boolean; noMemory?: boolean };
 
 export interface HubEvents {
   limits: [ClaudeLimits];
@@ -64,7 +64,20 @@ export class HttpError extends Error {
   }
 }
 
+/** Что SessionManager спрашивает у Диспетчера (dispatcher.ts): он меняет движок своей сессии. */
+export interface DispatcherHooks {
+  /** перед сообщением его сессии: выбрать мозг; hidden — что передать модели мимо ленты */
+  beforePrompt(id: string): Promise<{ hidden?: string } | undefined>;
+  /** системный промпт его сессии */
+  system(s: SessionInfo): string;
+  /** папка отдана ему: обычная сессия opencode получила бы там его инструменты */
+  reserved(directory: string): boolean;
+  /** движок запустился: подключить мозг, который сейчас не активен */
+  engineAdded(id: EngineId): void;
+}
+
 export class SessionManager extends EventEmitter<HubEvents> {
+  hooks?: DispatcherHooks;
   private engines = new Map<EngineId, Engine>();
   /** движки, которые не запустились, и почему */
   private failedEngines = new Map<EngineId, string>();
@@ -124,6 +137,11 @@ export class SessionManager extends EventEmitter<HubEvents> {
     }
     this.failedEngines.delete(engine.id);
     this.engines.set(engine.id, engine);
+    try {
+      this.hooks?.engineAdded(engine.id);
+    } catch (e) {
+      console.error(`[hub] dispatcher: ${(e as Error).message}`);
+    }
     for (const s of this.db.listSessions()) {
       if (s.engine !== engine.id) continue;
       this.byEngineSession.set(key(engine.id, s.engineSessionId), s.id);
@@ -143,6 +161,11 @@ export class SessionManager extends EventEmitter<HubEvents> {
     return [...ok, ...failed];
   }
 
+  /** Движок запущен, что о себе говорит. */
+  async engineInfo(id: EngineId): Promise<EngineInfo | undefined> {
+    return this.engines.get(id)?.info();
+  }
+
   private engine(id: EngineId): Engine {
     const e = this.engines.get(id);
     if (!e) throw new HttpError(400, L(`Движок ${id} не запущен`, `Engine ${id} is not running`));
@@ -159,12 +182,15 @@ export class SessionManager extends EventEmitter<HubEvents> {
     return s;
   }
 
-  async create(req: CreateSessionRequest): Promise<SessionInfo> {
+  async create(req: CreateSessionRequest, internal: { extraRules?: PermissionRule[] } = {}): Promise<SessionInfo> {
     let directory: string;
     try {
       directory = this.config.resolveAllowed(req.directory);
     } catch (e) {
       throw new HttpError(403, (e as Error).message);
+    }
+    if (req.engine === "opencode" && req.kind !== "dispatcher" && this.hooks?.reserved(directory)) {
+      throw new HttpError(409, L("Эта папка отдана Диспетчеру: выбери для сессии другую", "This folder belongs to the Dispatcher: pick another one for the session"));
     }
     const engine = this.engine(req.engine);
     const einfo = req.engine === "claude" || !req.model ? await engine.info() : undefined;
@@ -190,7 +216,7 @@ export class SessionManager extends EventEmitter<HubEvents> {
     let engineSessionId: string;
     try {
       // шаг задачи в копии проекта: наружу (в основную папку и дальше) агент не ходит и не спрашивает об этом
-      engineSessionId = await engine.createSession({ directory, model, permissionMode, title: req.title, ...(req.taskId && worktree ? { confined: true } : {}) });
+      engineSessionId = await engine.createSession({ directory, model, permissionMode, title: req.title, ...(req.taskId && worktree ? { confined: true } : {}), ...(internal.extraRules ? { extraRules: internal.extraRules } : {}) });
     } catch (e) {
       if (worktree) await removeWorktree(worktree);
       throw e;
@@ -221,7 +247,38 @@ export class SessionManager extends EventEmitter<HubEvents> {
     return info;
   }
 
-  async prompt(id: string, text: string, fileIds: string[] = []): Promise<void> {
+  // ---------- Диспетчер: одна лента, движок под ней меняется ----------
+
+  /** Новая сессия движка под существующей сессией хаба. */
+  async createEngineSession(id: string, engine: EngineId, o: { model: ModelRef; permissionMode: PermissionMode; extraRules?: PermissionRule[] }): Promise<string> {
+    const s = this.get(id);
+    const esid = await this.engine(engine).createSession({ directory: s.directory, title: s.title, ...o });
+    this.byEngineSession.set(key(engine, esid), id);
+    return esid;
+  }
+
+  /** После рестарта хаба: подключить сессию движка, которая сейчас не активна (addEngine знает только активную). */
+  attachEngineSession(id: string, engine: EngineId, esid: string, o: { model: ModelRef; permissionMode: PermissionMode; hasHistory: boolean }): void {
+    const s = this.get(id);
+    this.byEngineSession.set(key(engine, esid), id);
+    this.engine(engine).attach(esid, { directory: s.directory, ...o });
+  }
+
+  /** Сессия движка больше не нужна (Диспетчера удалили). */
+  dropEngineSession(engine: EngineId, esid: string): void {
+    this.engines.get(engine)?.forget(esid);
+    this.byEngineSession.delete(key(engine, esid));
+  }
+
+  /** Перевести сессию на другой движок или модель: со следующего сообщения. Клиенты видят это обычным обновлением сессии. */
+  setBrain(id: string, b: { engine: EngineId; engineSessionId: string; model: ModelRef; permissionMode: PermissionMode; effort?: string }): void {
+    this.db.setEngineSession(id, b.engineSessionId);
+    this.append(id, { type: "session.updated", patch: { engine: b.engine, model: b.model, permissionMode: b.permissionMode, effort: cleanEffort(b.effort) } });
+  }
+
+  async prompt(id: string, text: string, fileIds: string[] = [], o: { hideUser?: boolean } = {}): Promise<void> {
+    // Диспетчер мог смениться: дальше работаем со свежей записью
+    const brain = this.get(id).kind === "dispatcher" ? await this.hooks?.beforePrompt(id) : undefined;
     const s = this.get(id);
     const files: PromptFile[] = fileIds.map((fid) => {
       const f = this.files.get(fid);
@@ -229,25 +286,31 @@ export class SessionManager extends EventEmitter<HubEvents> {
       return { fileId: f.id, path: f.path, name: f.name, mime: f.mime, size: f.size };
     });
     if (!text.trim() && !files.length) throw new HttpError(400, L("Пустое сообщение", "Empty message"));
-    await this.engine(s.engine).prompt(s.engineSessionId, { text, files, model: s.model, ...this.launchOpts(s) });
+    await this.engine(s.engine).prompt(s.engineSessionId, { text, files, model: s.model, ...this.launchOpts(s), ...(brain?.hidden ? { hidden: brain.hidden } : {}), ...(o.hideUser ? { hideUser: true } : {}) });
   }
 
   /** Что задаётся движку при запуске процесса: промпт и правила группы, уровень рассуждений. Всё — со следующего сообщения. */
   private launchOpts(s: SessionInfo): { system?: string; effort?: string; noUserRules?: boolean } {
     const g = s.groupId ? this.db.getGroup(s.groupId) : undefined;
     // подсказка про то, что клиенты умеют показывать, — перед промптом группы
-    const system = [s.kind === "dispatcher" ? dispatcherPrompt(!!computerCommand(this.config), memoryText(s.directory)) : "", this.config.config.artifactsHint === false ? "" : artifactsHint(), g?.prompt ?? ""].filter(Boolean).join("\n\n");
+    const system = [s.kind === "dispatcher" ? (this.hooks?.system(s) ?? dispatcherPrompt(!!computerCommand(this.config), memoryText(s.directory))) : "", this.config.config.artifactsHint === false ? "" : artifactsHint(), g?.prompt ?? ""].filter(Boolean).join("\n\n");
     return { ...(system ? { system } : {}), ...(g?.noUserRules ? { noUserRules: true } : {}), ...(s.effort ? { effort: s.effort } : {}) };
   }
 
   /** Сжать контекст агента: история заменяется пересказом, в ленте появляется отметка «контекст сжат». */
-  async compact(id: string): Promise<void> {
+  async compact(id: string, o: { silent?: boolean; instructions?: string } = {}): Promise<void> {
     const s = this.get(id);
     const engine = this.engine(s.engine);
     if (!engine.compact) throw new HttpError(400, L("Этот движок не умеет сжимать контекст", "This engine can't compact the context"));
     if (s.status === "busy" || s.status === "retry") throw new HttpError(409, L("Агент ещё работает — дождись или останови его", "The agent is still working — wait or stop it"));
     // всё, с чем запущен процесс: иначе claude решил бы, что оно сменилось, и перезапустился без него
-    await engine.compact(s.engineSessionId, { model: s.model, ...this.launchOpts(s) });
+    await engine.compact(s.engineSessionId, { model: s.model, ...this.launchOpts(s), ...o });
+  }
+
+  /** Размер контекста агента, если движок его знает. */
+  contextTokens(id: string): number | undefined {
+    const s = this.get(id);
+    return this.engine(s.engine).contextTokens?.(s.engineSessionId);
   }
 
   /** Переименование, смена модели (со следующего сообщения) и режима подтверждений (сразу). */
@@ -561,8 +624,12 @@ export class SessionManager extends EventEmitter<HubEvents> {
 
   // ---------- группы сессий ----------
 
+  /** Память (memory.ts) закрывает группы: флаг хранится в её настройках. */
+  groupClosing?: (groupId: string, closed: boolean) => void;
+
   groups(): SessionGroup[] {
-    return this.db.listGroups();
+    const closed = this.config.config.memory?.closedGroups ?? [];
+    return this.db.listGroups().map((g) => (closed.includes(g.id) ? { ...g, noMemory: true } : g));
   }
 
   private cleanGroup(patch: GroupPatch): GroupPatch {
@@ -576,6 +643,7 @@ export class SessionManager extends EventEmitter<HubEvents> {
     // промпт уходит в командную строку claude — ограничиваем разумно
     if (patch.prompt !== undefined) out.prompt = String(patch.prompt).trim().slice(0, 8000);
     if (patch.noUserRules !== undefined) out.noUserRules = patch.noUserRules === true;
+    if (patch.noMemory !== undefined) out.noMemory = patch.noMemory === true;
     return out;
   }
 
@@ -585,8 +653,9 @@ export class SessionManager extends EventEmitter<HubEvents> {
     const sort = Math.max(0, ...this.db.listGroups().map((g) => g.sort)) + 1;
     const g: SessionGroup = { id: "g_" + randomUUID().replace(/-/g, "").slice(0, 12), name: c.name, sort, ...(c.icon ? { icon: c.icon } : {}), ...(c.prompt ? { prompt: c.prompt } : {}), ...(c.noUserRules ? { noUserRules: true } : {}) };
     this.db.saveGroup(g);
+    if (c.noMemory) this.groupClosing?.(g.id, true);
     this.emit("groups", this.groups());
-    return g;
+    return this.groups().find((x) => x.id === g.id) ?? g;
   }
 
   updateGroup(id: string, patch: GroupPatch & { sort?: number }): SessionGroup {
@@ -598,8 +667,9 @@ export class SessionManager extends EventEmitter<HubEvents> {
     if (c.prompt !== undefined) next.prompt = c.prompt || undefined;
     if (c.noUserRules !== undefined) next.noUserRules = c.noUserRules || undefined;
     this.db.saveGroup(next);
+    if (c.noMemory !== undefined) this.groupClosing?.(id, c.noMemory);
     this.emit("groups", this.groups());
-    return next;
+    return this.groups().find((x) => x.id === id) ?? next;
   }
 
   deleteGroup(id: string): void {
@@ -689,9 +759,9 @@ export class SessionManager extends EventEmitter<HubEvents> {
     if (ev.type === "part.upserted") this.attachOutgoingFile(id, ev.messageId, ev.part);
   }
 
-  /** Инструмент send_file_to_user вернул маркер файла — показываем файл частью того же сообщения. */
+  /** Инструмент send_file_to_user или show_screen вернул маркер файла — показываем файл частью того же сообщения. */
   private attachOutgoingFile(sessionId: string, messageId: string, part: Part): void {
-    if (part.type !== "tool" || part.status !== "completed" || !/send_file_to_user$/.test(part.tool)) return;
+    if (part.type !== "tool" || part.status !== "completed" || !/(send_file_to_user|show_screen)$/.test(part.tool)) return;
     const m = new RegExp(`${FILE_MARKER}(kf_[a-z0-9]+)`).exec(part.output ?? "");
     if (!m || this.shownFiles.has(m[1]!)) return;
     const f = this.files.get(m[1]!);

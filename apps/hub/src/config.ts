@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileS
 import { dirname, join, relative, resolve, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import { L } from "./lang.ts";
-import type { ModelRef, CustomProvider, LangSetting, McpServer, NewSessionPrefs, TelegramProxy, RemoteSettings } from "@kamharn/protocol";
+import type { BrainRef, ModelRef, CustomProvider, LangSetting, McpServer, NewSessionPrefs, TelegramProxy, RemoteSettings } from "@kamharn/protocol";
 
 /** Бот одной сессии: токен от @BotFather и подключённые личные чаты. */
 export interface SessionBotConfig {
@@ -51,10 +51,15 @@ export interface HubConfig {
   previewUrl?: string;
   /** подсказка агентам про живые артефакты (```html) и диаграммы (```mermaid); по умолчанию включена */
   artifactsHint?: boolean;
-  /** Диспетчер (dispatcher.ts): модель Claude его сессии (по умолчанию Opus); computer: false — без управления ПК */
-  dispatcher?: { model?: string; computer?: boolean; quickModel?: string; local?: { url?: string; model?: string } };
+  /** Диспетчер (dispatcher.ts): модель Claude его сессии (по умолчанию Sonnet); computer: false — без управления ПК; compactAt — тихое сжатие в паузу от этого размера контекста, 0 — выключено */
+  /** primary, fallback, autoFallback, computerOnOpencode — мозги Диспетчера (см. DispatcherBrains) */
+  dispatcher?: { primary?: BrainRef; fallback?: BrainRef | null; autoFallback?: boolean; computerOnOpencode?: boolean; model?: string; computer?: boolean; quickModel?: string; local?: { url?: string; model?: string }; compactAt?: number;
+  };
+  /** долгая память (memory.ts): closedGroups — группы, которых для неё нет; embeddings и writer — локальные модели векторов и дневника (нет — только полнотекст) */
+  memory?: { enabled?: boolean; closedGroups?: string[]; embeddings?: { url: string; model: string }; writer?: { url: string; model: string } };
   /** голос на ПК (voice.ts): включён, микрофон, порог слова-активатора */
-  voice?: { enabled?: boolean; device?: string; threshold?: number; pause?: number };
+  voice?: { enabled?: boolean; device?: string; threshold?: number; pause?: number; wake?: string;
+  };
   /** удалённый доступ через свой VPS (remote.ts): SSH-туннель + HTTPS на сервере */
   remote?: RemoteSettings;
   engines: {
