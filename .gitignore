@@ -14,6 +14,8 @@ tmp/*
 
 # локальный конфиг хаба (создаётся автоматически с дефолтами)
 config/kamharn.json
+# и его резервные копии: в них те же токены
+config/kamharn.json.*
 
 # ключ сервисного аккаунта Firebase для пушей (секрет)
 config/firebase-service-account.json

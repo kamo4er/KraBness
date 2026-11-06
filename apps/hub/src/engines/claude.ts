@@ -539,7 +539,7 @@ export class ClaudeEngine implements Engine {
     return this.sessions.get(engineSessionId)?.contextTokens;
   }
 
-  async prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string; effort?: string; noUserRules?: boolean; silentCompact?: boolean; hidden?: string }): Promise<void> {
+  async prompt(engineSessionId: string, o: { text: string; files: PromptFile[]; model: ModelRef; system?: string; effort?: string; noUserRules?: boolean; silentCompact?: boolean; hidden?: string; hideUser?: boolean }): Promise<void> {
     const s = this.sess(engineSessionId);
     if (s.model.modelId !== o.model.modelId) {
       // смена модели: перезапускаем процесс, транскрипт продолжится с --resume
@@ -582,15 +582,17 @@ export class ClaudeEngine implements Engine {
       s.busy = true;
     } else {
       // сообщение пользователя показываем сами: claude его не повторяет
-      const mid = "u_" + randomUUID().replace(/-/g, "").slice(0, 16);
-      this.sink?.event(s.id, { type: "message.upserted", message: { id: mid, role: "user", createdAt: Date.now() } });
-      this.sink?.event(s.id, { type: "part.upserted", messageId: mid, part: { type: "text", id: `${mid}:t`, text: o.text } });
-      for (const f of o.files) {
-        this.sink?.event(s.id, {
-          type: "part.upserted",
-          messageId: mid,
-          part: { type: "file", id: `${mid}:${f.fileId}`, fileId: f.fileId, name: f.name, mime: f.mime, size: f.size },
-        });
+      if (!o.hideUser) {
+        const mid = "u_" + randomUUID().replace(/-/g, "").slice(0, 16);
+        this.sink?.event(s.id, { type: "message.upserted", message: { id: mid, role: "user", createdAt: Date.now() } });
+        this.sink?.event(s.id, { type: "part.upserted", messageId: mid, part: { type: "text", id: `${mid}:t`, text: o.text } });
+        for (const f of o.files) {
+          this.sink?.event(s.id, {
+            type: "part.upserted",
+            messageId: mid,
+            part: { type: "file", id: `${mid}:${f.fileId}`, fileId: f.fileId, name: f.name, mime: f.mime, size: f.size },
+          });
+        }
       }
       // сообщение во время тихого сжатия: CLI ответит на него сразу после пересказа, а для клиентов ход начинается сейчас
       if (!s.busy || (s.silentCompact && !s.afterSilent)) {

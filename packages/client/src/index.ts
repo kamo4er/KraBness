@@ -64,6 +64,7 @@ export { mentionAt, mentionText, applyMention } from "./mention.ts";
 export { artifactDocument, artifactSource, isArtifactFile, isArtifactLang } from "./artifact.ts";
 export { engineUsable, engineName, modelKey, parseModelKey, modelOptions, optionReady, defaultTaskModels, brainOptions, brainDownText, computerHint, type EngineModelOption } from "./taskModels.ts";
 export { t, tn, locale, getLang, getLangSetting, applyLangSetting, onLangChange } from "./i18n.ts";
+export { sessionActions, actionGroupName, permissionShort, sessionSummary, matchQuery, branchName, type SessionAction, type SessionActionId, type SessionActionGroup, type SessionActionsOpts } from "./sessionActions.ts";
 import { applyLangSetting, locale } from "./i18n.ts";
 
 export type ConnState = "connecting" | "online" | "offline" | "unauthorized";

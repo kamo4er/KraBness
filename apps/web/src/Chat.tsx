@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { limitView, resolveFileRef, speakableText, type FileHit, type FileRef, type ChecksConfig, type ClaudeLimits, type EngineInfo, type ListeningPort, type WorktreeStatus, type MessageView, type ModelRef, type PermissionMode, type SlashCommand, t, locale } from "@kamharn/client";
+import { actionGroupName, limitView, resolveFileRef, sessionActions, sessionSummary, speakableText, type FileHit, type FileRef, type ChecksConfig, type ClaudeLimits, type EngineInfo, type ListeningPort, type WorktreeStatus, type MessageView, type ModelInfo, type ModelRef, type PermissionMode, type SessionAction, type SessionActionId, type SlashCommand, t, locale } from "@kamharn/client";
 import { MentionList, useMention } from "./Mention.tsx";
 import { client, fmtSize, go, useEngines, useHub, useQuickPrompts } from "./hub.ts";
 import { EffortSelect } from "./Effort.tsx";
 import { SessionUsage } from "./Usage.tsx";
-import { SessionBotButton } from "./SessionBot.tsx";
+import { SessionBotPanel } from "./SessionBot.tsx";
+import { onSessionAction, openPalette, type HeaderAction } from "./Palette.tsx";
 import { pickOpencodeModel } from "./ModelPick.tsx";
 import { MODES } from "./NewSession.tsx";
 import { FileChip, FileRefCtx, Limits, PartView, PermissionCard, QuestionCard } from "./Parts.tsx";
@@ -126,20 +127,16 @@ export function Chat({ id }: { id: string }) {
 }
 
 /** Автопроверка: вкл/выкл, команды проекта (сохранённые или предложенные хабом), прогон сейчас. */
-function ChecksButton({ sessionId, on }: { sessionId: string; on: boolean }) {
-  const [open, setOpen] = useState(false);
+function ChecksPanel({ sessionId, on, onClose }: { sessionId: string; on: boolean; onClose: () => void }) {
   const [cfg, setCfg] = useState<ChecksConfig>();
   const [text, setText] = useState("");
   const [msg, setMsg] = useState<string>();
-  const toggleOpen = () => {
-    setOpen(!open);
-    setMsg(undefined);
-    if (!open)
-      void client.checks(sessionId).then(
-        (c) => (setCfg(c), setText((c.commands.length ? c.commands : c.suggested).join("\n"))),
-        (e: Error) => setMsg(e.message),
-      );
-  };
+  useEffect(() => {
+    void client.checks(sessionId).then(
+      (c) => (setCfg(c), setText((c.commands.length ? c.commands : c.suggested).join("\n"))),
+      (e: Error) => setMsg(e.message),
+    );
+  }, [sessionId]);
   const list = () => text.split("\n").map((x) => x.trim()).filter(Boolean);
   const save = async () => {
     const c = await client.setChecks(sessionId, list());
@@ -148,157 +145,269 @@ function ChecksButton({ sessionId, on }: { sessionId: string; on: boolean }) {
   };
   const run = (f: () => Promise<unknown>) => void f().catch((e: Error) => setMsg(e.message));
   return (
-    <div className="preview">
-      <button className={`btn btn--icon ${on ? "btn--on" : ""}`} title={t("Автопроверка: после хода агента — тесты и сборка", "Auto-check: tests and build after each agent turn")} onClick={toggleOpen}>
-        ✓
-      </button>
-      {open && (
-        <div className="slash preview__menu checks__menu">
-          <label className="row">
-            <input
-              type="checkbox"
-              checked={on}
-              onChange={() =>
-                run(async () => {
-                  // включаем — сразу сохраняем команды (иначе нечего гонять)
-                  if (!on && !cfg?.commands.length) await save();
-                  await client.updateSession(sessionId, { autoCheck: !on });
-                })
-              }
-            />
-            {t("Автопроверка после каждого хода агента", "Auto-check after every agent turn")}
-          </label>
-          <p className="muted">
-            {t(
-              "Хаб гоняет команды по очереди в папке сессии. Упало — отправляет ошибку агенту (до 3 раз), прошло — пришлёт «готово».",
-              "The hub runs the commands in the session folder one by one. A failure goes back to the agent (up to 3 times), a pass sends you “done”.",
-            )}
-          </p>
-          {cfg ? <textarea className="input mono" rows={3} value={text} placeholder="npm test" onChange={(e) => setText(e.target.value)} /> : !msg && <p className="muted">{t("загрузка…", "loading…")}</p>}
-          {cfg && !cfg.commands.length && cfg.suggested.length > 0 && <p className="muted">{t("Предложены по файлам проекта — проверь и сохрани.", "Suggested from the project files — check and save.")}</p>}
-          {cfg && !cfg.commands.length && !cfg.suggested.length && <p className="muted">{t("Не нашёл тестов в проекте — впиши команды сам, по одной в строке.", "No tests found in the project — enter commands yourself, one per line.")}</p>}
-          <div className="row">
-            <button className="btn btn--small" onClick={() => run(async () => (await save(), setMsg(t("Сохранено", "Saved"))))}>
-              {t("Сохранить", "Save")}
-            </button>
-            <button className="btn btn--small" disabled={!list().length} onClick={() => run(async () => (await save(), await client.runChecks(sessionId), setOpen(false)))}>
-              {t("Проверить сейчас", "Check now")}
-            </button>
-          </div>
-          {cfg && <p className="muted mono">{cfg.directory}</p>}
-          {msg && <p className="muted">{msg}</p>}
-        </div>
-      )}
+    <div className="slash preview__menu checks__menu">
+      <label className="row">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={() =>
+            run(async () => {
+              // включаем — сразу сохраняем команды (иначе нечего гонять)
+              if (!on && !cfg?.commands.length) await save();
+              await client.updateSession(sessionId, { autoCheck: !on });
+            })
+          }
+        />
+        {t("Автопроверка после каждого хода агента", "Auto-check after every agent turn")}
+      </label>
+      <p className="muted">
+        {t(
+          "Хаб гоняет команды по очереди в папке сессии. Упало — отправляет ошибку агенту (до 3 раз), прошло — пришлёт «готово».",
+          "The hub runs the commands in the session folder one by one. A failure goes back to the agent (up to 3 times), a pass sends you “done”.",
+        )}
+      </p>
+      {cfg ? <textarea className="input mono" rows={3} value={text} placeholder="npm test" onChange={(e) => setText(e.target.value)} /> : !msg && <p className="muted">{t("загрузка…", "loading…")}</p>}
+      {cfg && !cfg.commands.length && cfg.suggested.length > 0 && <p className="muted">{t("Предложены по файлам проекта — проверь и сохрани.", "Suggested from the project files — check and save.")}</p>}
+      {cfg && !cfg.commands.length && !cfg.suggested.length && <p className="muted">{t("Не нашёл тестов в проекте — впиши команды сам, по одной в строке.", "No tests found in the project — enter commands yourself, one per line.")}</p>}
+      <div className="row">
+        <button className="btn btn--small" onClick={() => run(async () => (await save(), setMsg(t("Сохранено", "Saved"))))}>
+          {t("Сохранить", "Save")}
+        </button>
+        <button className="btn btn--small" disabled={!list().length} onClick={() => run(async () => (await save(), await client.runChecks(sessionId), onClose()))}>
+          {t("Проверить сейчас", "Check now")}
+        </button>
+      </div>
+      {cfg && <p className="muted mono">{cfg.directory}</p>}
+      {msg && <p className="muted">{msg}</p>}
     </div>
   );
 }
 
+type HeaderPanel = "menu" | "params" | "preview" | "checks" | "worktree" | "bot";
+
+/**
+ * Шапка чата: название и одна плашка параметров (модель · рассуждение · подтверждения), «Проект», палитра и меню ⋯.
+ * Остальное (превью, ветка, автопроверка, бот, сжатие, удаление) — в меню ⋯ и палитре; включённое видно плашками под шапкой.
+ */
 function ChatHeader({ info, engines, limits }: { info: NonNullable<ReturnType<typeof useHub>["sessions"][number]>; engines?: EngineInfo[]; limits?: ClaudeLimits }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(info.title);
+  const [panel, setPanel] = useState<HeaderPanel>();
+  const [bot, setBot] = useState<boolean>();
   const models = engines?.find((e) => e.id === info.engine)?.models ?? [];
-  const modelKey = (m: ModelRef) => `${m.providerId}/${m.modelId}`;
+  const busy = info.status === "busy" || info.status === "retry";
+  const actions = sessionActions(info, { platform: "web", bot });
+  const pills = actions.filter((a) => a.pill);
+
+  // подключён ли бот в Telegram — для плашки; не ответил — просто без неё
+  useEffect(() => {
+    let alive = true;
+    client.sessionBot(info.id).then(
+      (b) => alive && setBot(b.configured),
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, [info.id]);
+
+  useEffect(() => {
+    if (!panel) return;
+    // Esc в поле ввода (команды автопроверки, токен бота) панель не закрывает: набранное пропало бы
+    const typing = (el: EventTarget | null) => el instanceof HTMLElement && !!el.closest("textarea, input:not([type=checkbox]):not([type=radio])");
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !typing(e.target) && setPanel(undefined);
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [panel]);
+
+  const compact = () => {
+    // из меню пункт выключен, а палитра зовёт его всегда
+    if (busy) return alert(t("Агент работает — дождись или останови его", "The agent is working — wait or stop it"));
+    if (!confirm(t("Сжать контекст? Агент заменит историю коротким пересказом: главное запомнит, мелкие подробности забудет. Ранние сообщения в чате свернутся.", "Compact the context? The agent replaces the history with a short summary: it keeps the essentials and forgets small details. Earlier messages in the chat get collapsed."))) return;
+    void client.compact(info.id).catch((e: Error) => alert(e.message));
+  };
+  const remove = () => {
+    if (!confirm(t(`Удалить сессию «${info.title}»? История в KraBness пропадёт, файлы в папке останутся.`, `Delete session “${info.title}”? Its history in KraBness will be gone, files in the folder stay.`))) return;
+    void client.deleteSession(info.id).then(() => go({ page: "home" }));
+  };
+  const act = (id: HeaderAction) => {
+    setPanel(undefined);
+    if (id === "project") go({ page: "project", id: info.id });
+    else if (id === "compact") compact();
+    else if (id === "delete") remove();
+    else if (id === "handoff") void handoff(info.id);
+    else if (id === "params" || id === "preview" || id === "checks" || id === "bot" || (id === "worktree" && info.worktree)) setPanel(id);
+  };
+  // палитра команд зовёт те же действия; ref — чтобы подписка не пересоздавалась на каждый рендер
+  const actRef = useRef(act);
+  actRef.current = act;
+  useEffect(() => onSessionAction((id) => actRef.current(id)), []);
+
+  const toggle = (p: HeaderPanel) => setPanel((cur) => (cur === p ? undefined : p));
+  const close = () => setPanel(undefined);
 
   return (
-    <header className="chat__head">
-      <button className="btn btn--icon back" onClick={() => go({ page: "home" })} title={t("К списку", "Back to list")}>
-        ←
-      </button>
-      <div className="chat__titles">
-        {editing ? (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              setEditing(false);
-              if (title.trim() && title !== info.title) void client.updateSession(info.id, { title });
-            }}
-          >
-            <input className="input" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} onBlur={() => setEditing(false)} />
-          </form>
-        ) : (
-          <h2 className="chat__title" onClick={() => (setTitle(info.title), setEditing(true))} title={t("Переименовать", "Rename")}>
-            {info.title}
-          </h2>
-        )}
-        <div className="chat__meta muted">
-          <span className={`badge badge--${info.engine}`}>{info.engine}</span>
-          <select
-            className="select select--inline"
-            value={modelKey(info.model)}
-            onChange={(e) => {
-              const m = models.find((x) => modelKey(x) === e.target.value);
-              if (m) void client.updateSession(info.id, { model: { providerId: m.providerId, modelId: m.modelId } });
-            }}
-          >
-            {!models.some((m) => modelKey(m) === modelKey(info.model)) && <option value={modelKey(info.model)}>{info.model.modelId}</option>}
-            {models.map((m) => (
-              <option key={modelKey(m)} value={modelKey(m)} disabled={m.offline}>
-                {m.name}
-                {m.offline ? ` · ${t("не запущена", "not running")}` : m.free ? " · free" : ""}
-              </option>
-            ))}
-          </select>
-          <EffortSelect
-            inline
-            efforts={models.find((m) => modelKey(m) === modelKey(info.model))?.efforts ?? []}
-            value={info.effort ?? ""}
-            onChange={(v) => void client.updateSession(info.id, { effort: v }).catch((err: Error) => alert(err.message))}
-          />
-          <select
-            className="select select--inline"
-            title={t("Режим подтверждений, применяется сразу", "Approval mode, applies immediately")}
-            value={info.permissionMode}
-            onChange={(e) => {
-              client.updateSession(info.id, { permissionMode: e.target.value as PermissionMode }).catch((err: Error) => alert(err.message));
-            }}
-          >
-            {MODES().map((m) => (
-              <option key={m.id} value={m.id} title={m.hint}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-          {info.engine === "claude" && <Limits limits={limits} compact />}
-          {info.engine === "claude" && (
-            <button className="linkish" title={t("Новая сессия на бесплатной модели с выжимкой этой", "A new session on a free model with a summary of this one")} onClick={() => void handoff(info.id)}>
-              → opencode
-            </button>
+    <>
+      <header className="chat__head">
+        <button className="btn btn--icon back" onClick={() => go({ page: "home" })} title={t("К списку", "Back to list")}>
+          ←
+        </button>
+        <div className="chat__titles">
+          {editing ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setEditing(false);
+                if (title.trim() && title !== info.title) void client.updateSession(info.id, { title });
+              }}
+            >
+              <input className="input" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} onBlur={() => setEditing(false)} />
+            </form>
+          ) : (
+            <h2 className="chat__title" onClick={() => (setTitle(info.title), setEditing(true))} title={t("Переименовать", "Rename")}>
+              {info.title}
+            </h2>
           )}
-          <SessionUsage id={info.id} full />
-          <span className="chat__dir" title={info.directory}>
-            {info.directory}
-          </span>
+          <div className="chat__meta muted">
+            <SessionUsage id={info.id} full />
+            <span className="chat__dir" title={info.directory}>
+              {info.directory}
+            </span>
+          </div>
         </div>
-      </div>
-      {info.worktree && <WorktreeButton sessionId={info.id} branch={info.worktree.branch} base={info.worktree.base} busy={info.status === "busy"} />}
-      <PreviewButton sessionId={info.id} />
-      <ChecksButton sessionId={info.id} on={!!info.autoCheck} />
-      <SessionBotButton sessionId={info.id} />
-      <button
-        className="btn btn--icon"
-        title={t("Сжать контекст: агент перескажет разговор сам себе и освободит место", "Compact the context: the agent summarizes the conversation for itself and frees up space")}
-        disabled={info.status === "busy" || info.status === "retry"}
-        onClick={() => {
-          if (!confirm(t("Сжать контекст? Агент заменит историю коротким пересказом: главное запомнит, мелкие подробности забудет. Ранние сообщения в чате свернутся.", "Compact the context? The agent replaces the history with a short summary: it keeps the essentials and forgets small details. Earlier messages in the chat get collapsed."))) return;
-          void client.compact(info.id).catch((e: Error) => alert(e.message));
-        }}
-      >
-        🗜
-      </button>
-      <button className="btn btn--icon" title={t("Проект: изменения и файлы", "Project: changes and files")} onClick={() => go({ page: "project", id: info.id })}>
-        📁
-      </button>
-      <button
-        className="btn btn--icon btn--danger"
-        title={t("Удалить сессию", "Delete session")}
-        onClick={() => {
-          if (!confirm(t(`Удалить сессию «${info.title}»? История в KraBness пропадёт, файлы в папке останутся.`, `Delete session “${info.title}”? Its history in KraBness will be gone, files in the folder stay.`))) return;
-          void client.deleteSession(info.id).then(() => go({ page: "home" }));
-        }}
-      >
-        🗑
-      </button>
-    </header>
+        <button className={`hchip ${panel === "params" ? "hchip--on" : ""}`} title={t("Модель, рассуждение и подтверждения", "Model, reasoning and approvals")} onClick={() => toggle("params")} data-params>
+          <span className={`badge badge--${info.engine}`}>{info.engine}</span>
+          <span className="hchip__text">{sessionSummary(info, models)}</span>
+          <span className="muted">▾</span>
+        </button>
+        <button className="btn btn--icon chat__project" title={t("Проект: изменения и файлы", "Project: changes and files")} onClick={() => go({ page: "project", id: info.id })}>
+          📁<span className="chat__label"> {t("Проект", "Project")}</span>
+        </button>
+        <button className="btn btn--icon chat__kbd" title={t("Все действия и настройки", "All actions and settings")} onClick={openPalette}>
+          Ctrl K
+        </button>
+        <button className={`btn btn--icon ${panel === "menu" ? "btn--on" : ""}`} title={t("Ещё", "More")} onClick={() => toggle("menu")} data-menu>
+          ⋯
+        </button>
+        {panel && (
+          <>
+            <div className="chat__scrim" onClick={close} />
+            <div className="chat__panel">
+              {panel === "menu" && <ActionMenu actions={actions} busy={busy} onPick={act} />}
+              {panel === "params" && <ParamsPanel info={info} models={models} limits={limits} onHandoff={() => act("handoff")} />}
+              {panel === "preview" && <PreviewPanel sessionId={info.id} onClose={close} />}
+              {panel === "checks" && <ChecksPanel sessionId={info.id} on={!!info.autoCheck} onClose={close} />}
+              {panel === "worktree" && info.worktree && <WorktreePanel sessionId={info.id} branch={info.worktree.branch} base={info.worktree.base} busy={busy} onClose={close} />}
+              {panel === "bot" && <SessionBotPanel sessionId={info.id} onInfo={(b) => setBot(b.configured)} />}
+            </div>
+          </>
+        )}
+      </header>
+      {pills.length > 0 && (
+        <div className="chat__pills">
+          {pills.map((a) => (
+            <button key={a.id} className="hpill" title={a.label} onClick={() => act(a.id)}>
+              {a.pill}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Меню ⋯: действия по группам, у переключателей — вкл/выкл, удаление отдельно внизу. */
+function ActionMenu({ actions, busy, onPick }: { actions: SessionAction[]; busy: boolean; onPick: (id: SessionActionId) => void }) {
+  let group: string | undefined;
+  return (
+    <div className="slash amenu" data-action-menu>
+      {actions.map((a) => {
+        const head = a.group !== group && a.group !== "danger" ? actionGroupName(a.group) : undefined;
+        const sep = a.group === "danger" && group !== "danger";
+        group = a.group;
+        // сжимать можно, только когда агент не работает (хаб ответит 409)
+        const off = a.id === "compact" && busy;
+        return (
+          <div key={a.id}>
+            {head && <div className="amenu__group">{head}</div>}
+            {sep && <div className="amenu__sep" />}
+            <button className={`amenu__item ${a.danger ? "amenu__item--danger" : ""}`} disabled={off} title={off ? t("Агент работает — дождись или останови его", "The agent is working — wait or stop it") : undefined} onClick={() => onPick(a.id)} data-action={a.id}>
+              <span className="amenu__icon">{a.icon}</span>
+              <span className="amenu__text">
+                <span className="amenu__label">{a.label}</span>
+                <span className="amenu__hint">{a.hint}</span>
+              </span>
+              {a.on !== undefined && <span className={`amenu__state ${a.on ? "amenu__state--on" : ""}`}>{a.on ? t("вкл", "on") : t("выкл", "off")}</span>}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Плашка параметров раскрыта: модель, уровень рассуждений, режим подтверждений, лимиты Claude. */
+function ParamsPanel({ info, models, limits, onHandoff }: { info: NonNullable<ReturnType<typeof useHub>["sessions"][number]>; models: ModelInfo[]; limits?: ClaudeLimits; onHandoff: () => void }) {
+  const modelKey = (m: ModelRef) => `${m.providerId}/${m.modelId}`;
+  const efforts = models.find((m) => modelKey(m) === modelKey(info.model))?.efforts ?? [];
+  return (
+    <div className="slash params" data-params-panel>
+      <label className="params__row">
+        <span>{t("Модель", "Model")}</span>
+        <select
+          className="select"
+          value={modelKey(info.model)}
+          onChange={(e) => {
+            const m = models.find((x) => modelKey(x) === e.target.value);
+            if (m) void client.updateSession(info.id, { model: { providerId: m.providerId, modelId: m.modelId } });
+          }}
+        >
+          {!models.some((m) => modelKey(m) === modelKey(info.model)) && <option value={modelKey(info.model)}>{info.model.modelId}</option>}
+          {models.map((m) => (
+            <option key={modelKey(m)} value={modelKey(m)} disabled={m.offline}>
+              {m.name}
+              {m.offline ? ` · ${t("не запущена", "not running")}` : m.free ? " · free" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      {efforts.length > 0 && (
+        <label className="params__row">
+          <span>{t("Рассуждение", "Reasoning")}</span>
+          <EffortSelect efforts={efforts} value={info.effort ?? ""} onChange={(v) => void client.updateSession(info.id, { effort: v }).catch((err: Error) => alert(err.message))} />
+        </label>
+      )}
+      <label className="params__row">
+        <span>{t("Подтверждения", "Approvals")}</span>
+        <select
+          className="select"
+          title={t("Режим подтверждений, применяется сразу", "Approval mode, applies immediately")}
+          value={info.permissionMode}
+          onChange={(e) => {
+            client.updateSession(info.id, { permissionMode: e.target.value as PermissionMode }).catch((err: Error) => alert(err.message));
+          }}
+        >
+          {MODES().map((m) => (
+            <option key={m.id} value={m.id} title={m.hint}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {info.engine === "claude" && (
+        <>
+          {limits && (
+            <div className="params__row">
+              <span>{t("Лимиты Claude", "Claude limits")}</span>
+              <Limits limits={limits} compact />
+            </div>
+          )}
+          <button className="btn btn--small" title={t("Новая сессия на бесплатной модели с выжимкой этой", "A new session on a free model with a summary of this one")} onClick={onHandoff}>
+            {t("Продолжить на бесплатной модели →", "Continue on a free model →")}
+          </button>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -590,16 +699,12 @@ async function handoff(id: string): Promise<void> {
 }
 
 /** Отдельная ветка сессии: что сделано, «Влить» одним коммитом в основную, «Выбросить». */
-function WorktreeButton({ sessionId, branch, base, busy }: { sessionId: string; branch: string; base: string; busy: boolean }) {
-  const [open, setOpen] = useState(false);
+function WorktreePanel({ sessionId, branch, base, busy, onClose }: { sessionId: string; branch: string; base: string; busy: boolean; onClose: () => void }) {
   const [st, setSt] = useState<WorktreeStatus>();
   const [msg, setMsg] = useState<string>();
   const [working, setWorking] = useState(false);
   const load = () => client.worktreeStatus(sessionId).then(setSt, (e: Error) => setMsg(e.message));
-  const toggle = () => {
-    setOpen(!open);
-    if (!open) (setSt(undefined), setMsg(undefined), void load());
-  };
+  useEffect(() => void load(), [sessionId]);
   const act = async (what: "merge" | "discard") => {
     if (what === "discard" && !confirm(t(`Выбросить всё, что сделано в ветке ${branch} после последнего вливания?`, `Discard everything done in branch ${branch} since the last merge?`))) return;
     setWorking(true);
@@ -621,56 +726,44 @@ function WorktreeButton({ sessionId, branch, base, busy }: { sessionId: string; 
   };
   const changed = st ? st.ahead + st.dirty : 0;
   return (
-    <div className="wt">
-      <button className="btn btn--small" title={t(`Сессия работает в ветке ${branch}`, `The session works in branch ${branch}`)} onClick={toggle}>
-        ⎇ {branch.replace(/^kamharn\//, "")}
-      </button>
-      {open && (
-        <div className="wt__menu">
-          <div>
-            {t("Ветка", "Branch")} <code>{branch}</code> → {t("вливается в", "merges into")} <code>{base}</code>
-          </div>
-          {!st && !msg && <div className="muted">{t("Смотрю…", "Checking…")}</div>}
-          {st && (
-            <div className="muted">
-              {changed ? t(`коммитов: ${st.ahead}, незакоммиченных файлов: ${st.dirty}`, `commits: ${st.ahead}, uncommitted files: ${st.dirty}`) : t("изменений нет — копия совпадает с основной веткой", "no changes — the copy matches the main branch")}
-            </div>
-          )}
-          {st && st.files.length > 0 && <pre className="wt__files">{st.files.join("\n")}</pre>}
-          {msg && <div className="muted" style={{ whiteSpace: "pre-wrap" }}>{msg}</div>}
-          <div className="wt__actions">
-            <button className="btn btn--primary btn--small" disabled={!changed || busy || working} onClick={() => void act("merge")}>
-              {t("Влить в", "Merge into")} {base}
-            </button>
-            <button className="btn btn--small btn--danger" disabled={!changed || busy || working} onClick={() => void act("discard")}>
-              {t("Выбросить", "Discard")}
-            </button>
-            <button className="btn btn--small" onClick={() => setOpen(false)}>
-              {t("Закрыть", "Close")}
-            </button>
-          </div>
-          {busy && <div className="muted">{t("Агент работает — вливать можно, когда он закончит.", "The agent is working — you can merge when it finishes.")}</div>}
+    <div className="wt__menu">
+      <div>
+        {t("Ветка", "Branch")} <code>{branch}</code> → {t("вливается в", "merges into")} <code>{base}</code>
+      </div>
+      {!st && !msg && <div className="muted">{t("Смотрю…", "Checking…")}</div>}
+      {st && (
+        <div className="muted">
+          {changed ? t(`коммитов: ${st.ahead}, незакоммиченных файлов: ${st.dirty}`, `commits: ${st.ahead}, uncommitted files: ${st.dirty}`) : t("изменений нет — копия совпадает с основной веткой", "no changes — the copy matches the main branch")}
         </div>
       )}
+      {st && st.files.length > 0 && <pre className="wt__files">{st.files.join("\n")}</pre>}
+      {msg && <div className="muted" style={{ whiteSpace: "pre-wrap" }}>{msg}</div>}
+      <div className="wt__actions">
+        <button className="btn btn--primary btn--small" disabled={!changed || busy || working} onClick={() => void act("merge")}>
+          {t("Влить в", "Merge into")} {base}
+        </button>
+        <button className="btn btn--small btn--danger" disabled={!changed || busy || working} onClick={() => void act("discard")}>
+          {t("Выбросить", "Discard")}
+        </button>
+        <button className="btn btn--small" onClick={onClose}>
+          {t("Закрыть", "Close")}
+        </button>
+      </div>
+      {busy && <div className="muted">{t("Агент работает — вливать можно, когда он закончит.", "The agent is working — you can merge when it finishes.")}</div>}
     </div>
   );
 }
 
 /** Превью dev-сервера: на ПК — прямо localhost, с другого устройства — ссылка хаба через Tailscale. */
-function PreviewButton({ sessionId }: { sessionId: string }) {
+function PreviewPanel({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
   const [ports, setPorts] = useState<ListeningPort[]>();
-  const [open, setOpen] = useState(false);
   const local = ["localhost", "127.0.0.1"].includes(location.hostname);
-  const toggle = () => {
-    setOpen(!open);
-    if (!open) {
-      setPorts(undefined);
-      client.ports(sessionId).then(setPorts, () => setPorts([]));
-    }
-  };
+  useEffect(() => {
+    client.ports(sessionId).then(setPorts, () => setPorts([]));
+  }, [sessionId]);
   // notes — с панелью замечаний по вёрстке: только через прокси хаба (он вставляет панель), даже на ПК
   const go = (p: ListeningPort, notes = false) => {
-    setOpen(false);
+    onClose();
     if (local && !notes) return void window.open(`http://localhost:${p.port}/`, "_blank");
     // окно открываем сразу (иначе браузер посчитает его всплывающим), адрес подставляем после ответа хаба
     const w = window.open("about:blank", "_blank");
@@ -680,34 +773,27 @@ function PreviewButton({ sessionId }: { sessionId: string }) {
     );
   };
   return (
-    <div className="preview">
-      <button className="btn btn--icon" title={t("Превью dev-сервера", "Dev server preview")} onClick={toggle}>
-        ▶
-      </button>
-      {open && (
-        <ul className="slash preview__menu" onMouseLeave={() => setOpen(false)}>
-          {!ports && <li className="muted pad">{t("Ищу порты…", "Looking for ports…")}</li>}
-          {ports && !ports.length && <li className="muted pad">{t("Нет запущенных веб-серверов. Попроси агента запустить dev-сервер.", "No web servers running. Ask the agent to start a dev server.")}</li>}
-          {ports?.map((p) => (
-            <li key={p.port} className="preview__port">
-              <button className="slash__item" onClick={() => go(p)}>
-                <span>
-                  <span className="slash__name">:{p.port}</span> {p.process} {p.project ? <span className="muted">· {t("этот проект", "this project")}</span> : null}
-                </span>
-                <span className="muted">{p.command}</span>
-              </button>
-              <button
-                className="btn btn--small preview__notes"
-                title={t("Открыть с панелью замечаний: тыкаешь в элементы, пишешь, что не так, и отправляешь агенту этой сессии", "Open with the comments panel: tap elements, write what's wrong and send it to this session's agent")}
-                onClick={() => go(p, true)}
-              >
-                💬 {t("замечания", "comments")}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    <ul className="slash preview__menu">
+      {!ports && <li className="muted pad">{t("Ищу порты…", "Looking for ports…")}</li>}
+      {ports && !ports.length && <li className="muted pad">{t("Нет запущенных веб-серверов. Попроси агента запустить dev-сервер.", "No web servers running. Ask the agent to start a dev server.")}</li>}
+      {ports?.map((p) => (
+        <li key={p.port} className="preview__port">
+          <button className="slash__item" onClick={() => go(p)}>
+            <span>
+              <span className="slash__name">:{p.port}</span> {p.process} {p.project ? <span className="muted">· {t("этот проект", "this project")}</span> : null}
+            </span>
+            <span className="muted">{p.command}</span>
+          </button>
+          <button
+            className="btn btn--small preview__notes"
+            title={t("Открыть с панелью замечаний: тыкаешь в элементы, пишешь, что не так, и отправляешь агенту этой сессии", "Open with the comments panel: tap elements, write what's wrong and send it to this session's agent")}
+            onClick={() => go(p, true)}
+          >
+            💬 {t("замечания", "comments")}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 

@@ -1,7 +1,7 @@
 // Чат сессии: стрим сообщений, инструменты, подтверждения, смена модели и режима, отправка и остановка.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View, type TextInputInstance } from "react-native";
-import { limitView, resolveFileRef, type FileRef, type ClaudeLimits, type ListeningPort, type MessageView, type PermissionMode, type SessionInfo, type SlashCommand, type FileHit, t, locale } from "@kamharn/client";
+import { limitView, resolveFileRef, sessionActions, sessionSummary, type FileRef, type ClaudeLimits, type ListeningPort, type MessageView, type PermissionMode, type SessionActionId, type SessionInfo, type SlashCommand, type FileHit, t, locale } from "@kamharn/client";
 import { client, fmtSize, useEngines, useHub, useQuickPrompts } from "../store.ts";
 import { loadChat } from "../cache.ts";
 import { getDraft, getDraftFiles, setDraft, setDraftFiles } from "../drafts.ts";
@@ -12,11 +12,10 @@ import { useDictation, voiceAvailable } from "../voice.ts";
 import { back, go, replace } from "../nav.ts";
 import { MODES } from "./NewSession.tsx";
 import { FileChip, FileRefCtx, PartView, PermissionCard, QuestionCard } from "../Parts.tsx";
-import { Btn, ConnDot, EngineBadge, Limits, ListSheet, Picker } from "../ui.tsx";
+import { Btn, ConnDot, EngineBadge, ListSheet } from "../ui.tsx";
 import { C, S, mono } from "../theme.ts";
 import { dialog } from "../dialog.tsx";
 import { pickOpencodeModel } from "../modelPick.tsx";
-import { EffortPicker } from "../effort.tsx";
 import { SessionUsage } from "../Usage.tsx";
 import { MentionList, useMention } from "../mention.tsx";
 import { CopyActions, copyableText } from "../copy.tsx";
@@ -26,7 +25,7 @@ async function checksMenu(id: string, on: boolean): Promise<void> {
   const cfg = await client!.checks(id);
   const commands = cfg.commands.length ? cfg.commands : cfg.suggested;
   if (!commands.length) {
-    dialog(t("Нет команд проверки", "No check commands"), t("Не нашёл тестов в проекте. Задай команды в вебе на ПК: кнопка ✓ в шапке чата.", "No tests found in the project. Set the commands in the web UI on the PC: the ✓ button in the chat header."));
+    dialog(t("Нет команд проверки", "No check commands"), t("Не нашёл тестов в проекте. Задай команды в вебе на ПК: ⋯ → Автопроверка в шапке чата.", "No tests found in the project. Set the commands in the web UI on the PC: ⋯ → Auto-check in the chat header."));
     return;
   }
   const save = async () => {
@@ -140,17 +139,6 @@ export function Chat({ id }: { id: string }) {
       ) : (
         <Header info={info} conn={state.conn} onSearch={() => setSearch("")} talk={talk} />
       )}
-      {info.engine === "claude" || state.usage[info.id] ? (
-        <View style={st.limitRow}>
-          {info.engine === "claude" ? <Limits limits={state.limits} style={{ flex: 1 }} /> : <View style={{ flex: 1 }} />}
-          <SessionUsage id={info.id} full />
-          {info.engine === "claude" ? (
-            <Pressable hitSlop={8} onPress={() => handoff(info.id)}>
-              <Text style={{ color: C.accent, fontSize: 12 }}>→ opencode</Text>
-            </Pressable>
-          ) : null}
-        </View>
-      ) : null}
       {info.engine === "claude" ? <LimitBanner limits={state.limits} sessionId={id} /> : null}
       {info.resumeAt ? <ResumeBanner sessionId={id} at={info.resumeAt} /> : null}
       <View style={{ flex: 1 }}>
@@ -205,8 +193,15 @@ export function Chat({ id }: { id: string }) {
   );
 }
 
+type ParamSheet = "model" | "effort" | "mode";
+
+/**
+ * Шапка чата: ←, название, связь и ⋯; ниже одна плашка «модель · рассуждение · подтверждения» во всю ширину,
+ * под ней плашки включённого (ветка, автопроверка, разговор, бот). Пункты меню — общие с вебом (sessionActions).
+ */
 function Header({ info, conn, onSearch, talk }: { info: SessionInfo; conn: ReturnType<typeof useHub>["conn"]; onSearch: () => void; talk: boolean }) {
   const engines = useEngines();
+  const { limits } = useHub();
   const models = engines?.find((e) => e.id === info.engine)?.models ?? [];
   const key = (m: { providerId: string; modelId: string }) => `${m.providerId}/${m.modelId}`;
   const modelOptions = models.map((m, i) => ({
@@ -216,97 +211,138 @@ function Header({ info, conn, onSearch, talk }: { info: SessionInfo; conn: Retur
     ...(i === 0 || models[i - 1]!.providerId !== m.providerId ? { group: m.providerId } : {}),
   }));
   if (!models.some((m) => key(m) === key(info.model))) modelOptions.unshift({ value: key(info.model), label: info.model.modelId, disabled: false });
+  const efforts = models.find((m) => key(m) === key(info.model))?.efforts ?? [];
+  // сохранённый уровень мог не подойти модели — тогда «по умолчанию»
+  const effort = info.effort && efforts.includes(info.effort) ? info.effort : "";
 
   const [preview, setPreview] = useState(false);
+  const [sheet, setSheet] = useState<ParamSheet>();
+  const [bot, setBot] = useState<boolean>();
+  // подключён ли бот в Telegram — для плашки; не ответил — просто без неё
+  useEffect(() => {
+    let alive = true;
+    client?.sessionBot(info.id).then(
+      (b) => alive && setBot(b.configured),
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, [info.id]);
   const fail = (e: Error) => dialog(t("Не получилось", "Failed"), e.message);
+  const actions = sessionActions(info, { platform: "mobile", talk, bot });
+  const pills = actions.filter((a) => a.pill);
+
+  const act = (id: SessionActionId) => {
+    if (id === "project") go({ page: "project", id: info.id });
+    else if (id === "preview") setPreview(true);
+    else if (id === "worktree") void worktreeMenu(info);
+    else if (id === "checks") void checksMenu(info.id, !!info.autoCheck).catch(fail);
+    else if (id === "talk") setTalk(info.id, !talk);
+    else if (id === "bot") go({ page: "sessionBot", id: info.id });
+    else if (id === "search") onSearch();
+    else if (id === "compact")
+      dialog(
+        t("Сжать контекст?", "Compact the context?"),
+        t("Агент заменит историю коротким пересказом: главное запомнит, мелкие подробности забудет. Ранние сообщения в чате свернутся.", "The agent replaces the history with a short summary: it keeps the essentials and forgets small details. Earlier messages in the chat get collapsed."),
+        [
+          { text: t("Отмена", "Cancel"), style: "cancel" },
+          { text: t("Сжать", "Compact"), onPress: () => void client?.compact(info.id).catch(fail) },
+        ],
+      );
+    else if (id === "delete")
+      dialog(t("Удалить сессию?", "Delete the session?"), t(`«${info.title}» пропадёт из KraBness, файлы в папке останутся.`, `“${info.title}” will be removed from KraBness, files in the folder stay.`), [
+        { text: t("Отмена", "Cancel"), style: "cancel" },
+        { text: t("Удалить", "Delete"), style: "destructive", onPress: () => void client?.deleteSession(info.id).then(back, fail) },
+      ]);
+  };
+
+  const menu = () =>
+    dialog(
+      info.title,
+      undefined,
+      [
+        ...actions.map((a) => ({
+          text: a.on === undefined ? a.label : `${a.label}: ${a.on ? t("вкл", "on") : t("выкл", "off")}`,
+          icon: a.icon,
+          hint: a.hint,
+          ...(a.danger ? { style: "destructive" as const } : {}),
+          onPress: () => act(a.id),
+        })),
+        { text: t("Закрыть", "Close"), style: "cancel" as const },
+      ],
+      { cancelable: true },
+    );
+
+  const lv = info.engine === "claude" ? limitView(limits) : undefined;
+  const params = () =>
+    dialog(t("Параметры сессии", "Session settings"), lv ? `${t("Лимиты Claude", "Claude limits")}: ${t("5ч", "5h")} ${lv.fiveHour ?? "—"}% · ${t("неделя", "week")} ${lv.sevenDay ?? "—"}%` : undefined, [
+      { text: t("Модель", "Model"), icon: "🧠", hint: modelOptions.find((o) => o.value === key(info.model))?.label ?? info.model.modelId, onPress: () => setSheet("model") },
+      ...(efforts.length ? [{ text: t("Рассуждение", "Reasoning"), icon: "💭", hint: effort || "auto", onPress: () => setSheet("effort") }] : []),
+      { text: t("Подтверждения", "Approvals"), icon: "🔒", hint: MODES().find((m) => m.id === info.permissionMode)?.label ?? info.permissionMode, onPress: () => setSheet("mode") },
+      ...(info.engine === "claude" ? [{ text: t("Продолжить на бесплатной модели", "Continue on a free model"), icon: "→", hint: t("новая сессия opencode с выжимкой этой", "a new opencode session with a summary of this one"), onPress: () => handoff(info.id) }] : []),
+      { text: t("Закрыть", "Close"), style: "cancel" as const },
+    ]);
+
   return (
     <View style={[S.head, st.head]}>
       <PreviewSheet sessionId={info.id} visible={preview} onClose={() => setPreview(false)} />
+      <ListSheet
+        visible={sheet === "model"}
+        title={t("Модель", "Model")}
+        options={modelOptions}
+        value={key(info.model)}
+        onClose={() => setSheet(undefined)}
+        onPick={(v) => {
+          const m = models.find((x) => key(x) === v);
+          if (m && v !== key(info.model)) client?.updateSession(info.id, { model: { providerId: m.providerId, modelId: m.modelId } }).catch(fail);
+        }}
+      />
+      <ListSheet
+        visible={sheet === "effort"}
+        title={t("Сколько модель думает перед ответом", "How hard the model thinks before answering")}
+        options={[{ value: "", label: "auto", hint: t("по умолчанию: как решит модель", "default: as the model decides") }, ...efforts.map((x) => ({ value: x, label: x }))]}
+        value={effort}
+        onClose={() => setSheet(undefined)}
+        onPick={(v) => v !== effort && client?.updateSession(info.id, { effort: v }).catch(fail)}
+      />
+      <ListSheet
+        visible={sheet === "mode"}
+        title={t("Подтверждения", "Approvals")}
+        options={MODES().map((m) => ({ value: m.id, label: m.label, hint: m.hint }))}
+        value={info.permissionMode}
+        onClose={() => setSheet(undefined)}
+        onPick={(v) => v !== info.permissionMode && client?.updateSession(info.id, { permissionMode: v as PermissionMode }).catch(fail)}
+      />
       <View style={st.headRow}>
         <Btn small kind="ghost" title="←" onPress={back} />
-        <Text style={[S.h2, { flex: 1 }]} numberOfLines={1}>
-          {info.title}
-        </Text>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={S.h2} numberOfLines={1}>
+            {info.title}
+          </Text>
+          <SessionUsage id={info.id} full />
+        </View>
         <ConnDot conn={conn} />
-        <Btn small kind="ghost" title="🔍" onPress={onSearch} />
-        {info.worktree ? <Btn small kind="ghost" title="⎇" onPress={() => void worktreeMenu(info)} /> : null}
-        <Btn small kind="ghost" title="📁" onPress={() => go({ page: "project", id: info.id })} />
-        <Btn
-          small
-          kind="ghost"
-          title="⋯"
-          onPress={() =>
-            dialog(info.title, undefined, [
-              { text: t("Превью dev-сервера", "Dev server preview"), icon: "▶️", hint: t("открыть сайт или игру проекта в браузере", "open the project's site or game in the browser"), onPress: () => setPreview(true) },
-              { text: t("Проект", "Project"), icon: "📁", hint: t("изменения, файлы, терминал", "changes, files, terminal"), onPress: () => go({ page: "project", id: info.id }) },
-              { text: t("Бот в Telegram", "Telegram bot"), icon: "✈️", hint: t("писать этой сессии из Telegram, файлы туда-обратно", "talk to this session from Telegram, files both ways"), onPress: () => go({ page: "sessionBot", id: info.id }) },
-              {
-                text: info.autoCheck ? t("Автопроверка: вкл", "Auto-check: on") : t("Автопроверка: выкл", "Auto-check: off"),
-                icon: "✅",
-                hint: t("после хода агента — тесты и сборка, ошибки уходят агенту", "tests and build after each agent turn, failures go back to the agent"),
-                onPress: () => void checksMenu(info.id, !!info.autoCheck).catch(fail),
-              },
-              {
-                text: talk ? t("Разговор: вкл", "Talk mode: on") : t("Разговор: выкл", "Talk mode: off"),
-                icon: "🗣",
-                hint: t("выключил микрофон — сообщение ушло, ответ звучит вслух", "mic off — the message is sent, the answer is read aloud"),
-                onPress: () => setTalk(info.id, !talk),
-              },
-              {
-                text: t("Сжать контекст", "Compact the context"),
-                icon: "🗜",
-                hint: t("агент перескажет разговор сам себе и освободит место", "the agent summarizes the conversation for itself and frees up space"),
-                onPress: () =>
-                  dialog(
-                    t("Сжать контекст?", "Compact the context?"),
-                    t("Агент заменит историю коротким пересказом: главное запомнит, мелкие подробности забудет. Ранние сообщения в чате свернутся.", "The agent replaces the history with a short summary: it keeps the essentials and forgets small details. Earlier messages in the chat get collapsed."),
-                    [
-                      { text: t("Отмена", "Cancel"), style: "cancel" },
-                      { text: t("Сжать", "Compact"), onPress: () => void client?.compact(info.id).catch(fail) },
-                    ],
-                  ),
-              },
-              {
-                text: t("Удалить сессию", "Delete session"),
-                icon: "🗑",
-                style: "destructive",
-                onPress: () =>
-                  dialog(t("Удалить сессию?", "Delete the session?"), t(`«${info.title}» пропадёт из KraBness, файлы в папке останутся.`, `“${info.title}” will be removed from KraBness, files in the folder stay.`), [
-                    { text: t("Отмена", "Cancel"), style: "cancel" },
-                    { text: t("Удалить", "Delete"), style: "destructive", onPress: () => void client?.deleteSession(info.id).then(back, fail) },
-                  ]),
-              },
-              { text: t("Закрыть", "Close"), style: "cancel" },
-            ], { cancelable: true })
-          }
-        />
+        <Btn small kind="ghost" title="⋯" onPress={menu} />
       </View>
-      <View style={st.headRow}>
+      <Pressable style={({ pressed }) => [st.paramChip, pressed && { opacity: 0.7 }]} onPress={params}>
         <EngineBadge engine={info.engine} />
-        <Picker
-          title={t("Модель", "Model")}
-          style={{ flex: 1 }}
-          value={key(info.model)}
-          options={modelOptions}
-          onChange={(v) => {
-            const m = models.find((x) => key(x) === v);
-            if (m) client?.updateSession(info.id, { model: { providerId: m.providerId, modelId: m.modelId } }).catch(fail);
-          }}
-        />
-        <EffortPicker
-          style={{ flex: 0.6 }}
-          efforts={models.find((m) => key(m) === key(info.model))?.efforts ?? []}
-          value={info.effort ?? ""}
-          onChange={(v) => client?.updateSession(info.id, { effort: v }).catch(fail)}
-        />
-        <Picker
-          title={t("Подтверждения", "Approvals")}
-          style={{ flex: 1 }}
-          value={info.permissionMode}
-          options={MODES().map((m) => ({ value: m.id, label: m.label, hint: m.hint }))}
-          onChange={(v) => client?.updateSession(info.id, { permissionMode: v as PermissionMode }).catch(fail)}
-        />
-      </View>
+        <Text style={st.paramChipText} numberOfLines={1}>
+          {sessionSummary(info, models)}
+        </Text>
+        <Text style={st.paramChipCaret}>▾</Text>
+      </Pressable>
+      {pills.length ? (
+        <View style={st.pills}>
+          {pills.map((a) => (
+            <Pressable key={a.id} style={({ pressed }) => [st.pill, pressed && { opacity: 0.7 }]} hitSlop={4} onPress={() => act(a.id)}>
+              <Text style={st.pillText} numberOfLines={1}>
+                {a.pill}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -571,6 +607,12 @@ const st = StyleSheet.create({
   send: { minWidth: 46, minHeight: 42, borderRadius: 10, alignItems: "center", justifyContent: "center", paddingHorizontal: 12, backgroundColor: C.accent },
   sendRec: { backgroundColor: C.err },
   headRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  paramChip: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: C.line, backgroundColor: C.bg3 },
+  paramChipText: { flex: 1, color: C.text, fontSize: 13 },
+  paramChipCaret: { color: C.muted, fontSize: 12 },
+  pills: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  pill: { paddingHorizontal: 9, paddingVertical: 3, borderRadius: 999, borderWidth: 1, borderColor: "rgba(34,197,94,0.35)", backgroundColor: "rgba(34,197,94,0.1)", maxWidth: "100%" },
+  pillText: { color: C.ok, fontSize: 12 },
   messages: { padding: 12, gap: 14 },
   userRow: { flexDirection: "row", justifyContent: "flex-end" },
   bubble: { backgroundColor: C.accent2, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14, borderBottomRightRadius: 4, maxWidth: "88%", gap: 6 },
@@ -584,7 +626,6 @@ const st = StyleSheet.create({
   composer: { flexDirection: "row", alignItems: "flex-end", gap: 6, padding: 8 },
   iconBtn: { paddingHorizontal: 9, minWidth: 40 },
   quick: { gap: 6, paddingHorizontal: 8, paddingTop: 8 },
-  limitRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 4, backgroundColor: C.bg2 },
   banner: { flexDirection: "row", alignItems: "center", gap: 8, margin: 8, padding: 10, borderRadius: 10, backgroundColor: "#2a2416", borderWidth: 1, borderColor: "#5a4a20" },
   bannerDanger: { backgroundColor: "#2a1518", borderColor: "#5b2630" },
   slash: { maxHeight: 240, marginHorizontal: 8, marginTop: 8, backgroundColor: C.bg, borderRadius: 10, borderWidth: 1, borderColor: C.line },

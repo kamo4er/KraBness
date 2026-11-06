@@ -53,7 +53,8 @@ export interface HubConfig {
   artifactsHint?: boolean;
   /** Диспетчер (dispatcher.ts): модель Claude его сессии (по умолчанию Sonnet); computer: false — без управления ПК; compactAt — тихое сжатие в паузу от этого размера контекста, 0 — выключено */
   /** primary, fallback, autoFallback, computerOnOpencode — мозги Диспетчера (см. DispatcherBrains) */
-  dispatcher?: { primary?: BrainRef; fallback?: BrainRef | null; autoFallback?: boolean; computerOnOpencode?: boolean; model?: string; computer?: boolean; quickModel?: string; local?: { url?: string; model?: string }; compactAt?: number;
+  /** maxSessions — сколько сессий по его поручениям работают одновременно, остальное ждёт в очереди (по умолчанию 3) */
+  dispatcher?: { maxSessions?: number; primary?: BrainRef; fallback?: BrainRef | null; autoFallback?: boolean; computerOnOpencode?: boolean; model?: string; computer?: boolean; quickModel?: string; local?: { url?: string; model?: string }; compactAt?: number;
   };
   /** долгая память (memory.ts): closedGroups — группы, которых для неё нет; embeddings и writer — локальные модели векторов и дневника (нет — только полнотекст) */
   memory?: { enabled?: boolean; closedGroups?: string[]; embeddings?: { url: string; model: string }; writer?: { url: string; model: string } };

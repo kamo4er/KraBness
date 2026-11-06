@@ -212,12 +212,14 @@ test("закрытая группа: не запоминается, не нах�
   const homeE = t.sessions.engineSessionIdOf(home.id)!;
   t.say(homeE, "h1", "user", "Анализы крови у дочки в норме");
   assert.equal((await t.memory.recall("анализы крови")).items.length, 1, "пока открыта — помнит");
-  t.memory.put({ key: "diary:2026-11-01", kind: "diary", source: "diary", ts: NOW, text: "Смотрели анализы крови" });
+  // журнал ставит время сам: день записи настоящий, а не NOW
+  const day = String((t.db.db.prepare("SELECT day FROM memory_items WHERE kind = 'chat' LIMIT 1").get() as { day: string }).day);
+  t.memory.put({ key: `diary:${day}`, kind: "diary", source: "diary", ts: NOW, text: "Смотрели анализы крови" });
 
   t.sessions.updateGroup(group.id, { noMemory: true });
   assert.equal(t.sessions.groups().find((g) => g.id === group.id)!.noMemory, true);
   assert.equal((await t.memory.recall("анализы крови")).items.length, 0, "стёрто");
-  assert.equal((await t.memory.recall("сегодня анализы")).diaries.length, 0, "дневник того дня стёрт и напишется заново");
+  assert.equal((await t.memory.recall("анализы", { day })).diaries.length, 0, "дневник того дня стёрт и напишется заново");
   t.say(homeE, "h2", "user", "Новые анализы крови тоже в норме");
   assert.equal((await t.memory.recall("анализы крови")).items.length, 0, "новое не запоминается");
   assert.equal(t.config.config.memory?.closedGroups?.includes(group.id), true, "флаг переживёт рестарт");

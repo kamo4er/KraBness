@@ -97,7 +97,7 @@ test("своя сессия: Claude, «Автономно», папка Dispatch
   assert.equal(dispatcher.isScope(sessions.engineSessionIdOf(w.id)!), false);
 });
 
-test("пишет в сессию с пометкой, ждёт конец хода и пересказывает; свою сессию не трогает", async () => {
+test("пишет в сессию с пометкой и сразу возвращается; хвост читает сам; свою сессию не трогает", async () => {
   const { root, sessions, opencode, dispatcher } = await setup();
   const d = await dispatcher.ensure();
   const w = await sessions.create({ engine: "opencode", directory: join(root, "Shop"), title: "Магазин" });
@@ -105,9 +105,8 @@ test("пишет в сессию с пометкой, ждёт конец ход
   assert.doesNotMatch(dispatcher.listSessions(), new RegExp(d.id), "себя в списке не показывает");
   await dispatcher.send(w.id, "почини корзину");
   assert.equal(opencode.prompts.at(-1)!.text, "[Диспетчер] почини корзину");
-  const t0 = Date.now();
-  const out = await dispatcher.wait(w.id, 10);
-  assert.ok(Date.now() - t0 < 3000, `вернулся по концу хода, а не по таймауту (${Date.now() - t0} мс)`);
+  await new Promise((r) => setTimeout(r, 400));
+  const out = dispatcher.readSession(w.id, 3);
   assert.match(out, /готово: \[Диспетчер\] почини корзину/);
   assert.match(out, /инструменты: Bash/);
   assert.match(dispatcher.listSessions(), /↳ готово/);
@@ -122,8 +121,7 @@ test("разрешения: обычное — отвечает, необрат�
   opencode.sink().event(esid, { type: "permission.asked", request: { id: "r2", tool: "bash", title: "npm test", canAlways: true } });
   const tail = dispatcher.readSession(w.id);
   assert.match(tail, /request_id=r1 · bash: git push origin main/);
-  // wait сразу возвращается: сессия ждёт ответа
-  assert.match(await dispatcher.wait(w.id, 10), /request_id=r2/);
+  assert.match(tail, /request_id=r2/);
   assert.match(await dispatcher.answer(w.id, "r1", "once"), /необратимое/);
   assert.match(await dispatcher.answer(w.id, "r1", "reject"), /reject/, "отказать можно");
   assert.match(await dispatcher.answer(w.id, "r2", "once"), /once/);
@@ -165,7 +163,7 @@ test("MCP: инструменты харнесса только в скоупе 
   };
   try {
     const mine = await tools(sessions.engineSessionIdOf(d.id)!);
-    for (const n of ["list_sessions", "read_session", "send_to_session", "wait_session", "answer_request", "create_session", "create_task", "list_models", "show_screen", "open_url"]) assert.ok(mine.names.includes(n), n);
+    for (const n of ["list_sessions", "read_session", "send_to_session", "read_task", "answer_request", "create_session", "create_task", "list_models", "show_screen", "open_url"]) assert.ok(mine.names.includes(n), n);
     const shot = (await mine.c.callTool({ name: "show_screen", arguments: {} })) as { content: Array<{ text: string }> };
     const fid = /kamharn-file:(kf_\w+)/.exec(shot.content[0]!.text)?.[1];
     assert.ok(fid, "маркер файла в выводе");

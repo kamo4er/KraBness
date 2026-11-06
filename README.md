@@ -102,7 +102,7 @@ The model needs vision, otherwise it works without PC control. Your conversation
 Give a goal and a project, and the hub runs the work from start to report:
 
 1. An agent works in a separate copy of the project, on its own branch.
-2. If check commands are saved for the project, the hub runs them and a failure goes back to the agent. Save them once with the ✓ button in a chat (it suggests tests, typecheck and lint from the project files). Without them this step is skipped and the report says "not configured".
+2. If check commands are saved for the project, the hub runs them and a failure goes back to the agent. Save them once in a chat with ⋯ → Auto-check (it suggests tests, typecheck and lint from the project files). Without them this step is skipped and the report says "not configured".
 3. A review model (by default on opencode, otherwise on the worker's engine) reviews the diff, the agent fixes the remarks, up to two review rounds.
 4. You get a notification and a report: **merge** into the main branch as one commit, ask for **another round** with a comment, or **discard**.
 
@@ -115,7 +115,7 @@ The hub merges nothing into the main branch without your decision. Failed checks
 
 - **Queue.** Tasks start as slots free up (two at once by default), or at night: "Start at night" waits until 02:00.
 - **Any engine.** Pick the models for the work and for the review. By default the work goes to Claude if you're signed in, the review to opencode.
-- **Auto-check in any session.** The ✓ button in the chat header (⋯ → Auto-check in the app) turns on checks after each agent turn. A red check goes to the agent, up to three attempts, and stops early if the same error comes back.
+- **Auto-check in any session.** ⋯ → Auto-check in the chat header turns on checks after each agent turn. A red check goes to the agent, up to three attempts, and stops early if the same error comes back.
 - **Hit a Claude limit?** The session waits for the reset and continues by itself. "Don't wait" hands the work over to an opencode model.
 
 <p align="center">

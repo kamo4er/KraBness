@@ -15,6 +15,7 @@ import { PairScreen } from "./PairScreen.tsx";
 import { Limits } from "./Parts.tsx";
 import { UpdateBanner } from "./Updates.tsx";
 import { SearchAll } from "./SearchAll.tsx";
+import { CommandPalette } from "./Palette.tsx";
 import { t, locale, type SessionGroup, type SessionInfo } from "@kamharn/client";
 
 const connLabel = (c: "connecting" | "online" | "offline" | "unauthorized") =>
@@ -73,6 +74,8 @@ export function App() {
           </div>
         )}
       </main>
+      {/* вне <main>: на телефоне на главной он скрыт, и палитра открылась бы невидимой */}
+      <CommandPalette />
     </div>
   );
 }

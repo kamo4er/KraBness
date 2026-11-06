@@ -100,18 +100,10 @@ function registerHarness(server: McpServer, d: Dispatcher, scope: string): void 
   server.registerTool(
     "send_to_session",
     {
-      description: "Send a prompt to a session as the Dispatcher (the chat shows it marked as yours). Then call wait_session to get the result.",
+      description: "Hand work to a session as the Dispatcher (the chat shows it marked as yours). Returns at once, there is no waiting: end your turn, the hub writes you a “[Hub]” line when the session finishes, asks something or fails. If the session or its folder is busy or too many sessions are working, the work is queued and starts by itself.",
       inputSchema: { session_id: z.string(), text: z.string() },
     },
     ({ session_id, text }) => run(() => d.send(session_id, text))(),
-  );
-  server.registerTool(
-    "wait_session",
-    {
-      description: "Wait until the session finishes its turn, asks a question or asks for permission; returns the tail of the session.",
-      inputSchema: { session_id: z.string(), timeout_sec: z.number().int().optional().describe("default 300, max 1200") },
-    },
-    ({ session_id, timeout_sec }) => run(() => d.wait(session_id, timeout_sec ?? 300))(),
   );
   server.registerTool(
     "answer_request",
@@ -131,7 +123,7 @@ function registerHarness(server: McpServer, d: Dispatcher, scope: string): void 
   server.registerTool(
     "create_session",
     {
-      description: "Create a new coding session in a project folder. engine: claude | opencode; model: provider/model from list_models (default — the engine's default). worktree: work in a separate git branch.",
+      description: "Create a new coding session in a project folder. engine: claude | opencode; model: provider/model from list_models (default — the engine's default). worktree: work in a separate git branch; if you don't pass it, a copy is made by itself when someone is already working in this folder.",
       inputSchema: { directory: z.string(), engine: z.enum(["claude", "opencode"]), model: z.string().optional(), title: z.string().optional(), worktree: z.boolean().optional() },
     },
     ({ directory, engine, model, title, worktree }) =>
@@ -148,6 +140,14 @@ function registerHarness(server: McpServer, d: Dispatcher, scope: string): void 
       inputSchema: { goal: z.string(), directory: z.string(), title: z.string().optional() },
     },
     ({ goal, directory, title }) => run(() => d.createTask({ goal, directory, ...(title ? { title } : {}) }))(),
+  );
+  server.registerTool(
+    "read_task",
+    {
+      description: "Read an orchestrator task: status, goal, error or what it waits for, and the report when it is ready.",
+      inputSchema: { task_id: z.string() },
+    },
+    ({ task_id }) => run(() => d.readTask(task_id))(),
   );
   // без Claude и без своего сервера отвечать некому
   if (d.askAvailable()) {

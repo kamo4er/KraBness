@@ -135,6 +135,7 @@ export async function createHub(opts: HubOptions = {}): Promise<Hub> {
     sessions,
     config,
     tasks,
+    autoCheck,
     files,
     memory,
     ask: (p, m) => (claude ? claude.ask(p, m) : Promise.reject(new Error("claude is off"))),

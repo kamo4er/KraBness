@@ -469,3 +469,50 @@ section .update__notes { margin: 6px 0 10px; }
 .searchall__snip { font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .searchall__snip b { color: #ffd166; font-weight: 600; }
 .searchall__empty { margin: 4px 2px; font-size: 13px; }
+
+/* шапка чата: плашка параметров, меню ⋯, панели, плашки включённого */
+/* шапка выше затемнения панели: ⋯ и плашка переключаются с первого нажатия */
+.chat__head { position: relative; z-index: 21; }
+.chat__head > button, .chat__head > .chat__titles { position: relative; z-index: 20; }
+.chat__head .btn--on { border-color: #3a4150; color: var(--text); }
+.hchip { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 340px; flex-shrink: 1; padding: 6px 10px; background: var(--bg3); border: 1px solid var(--line); border-radius: 8px; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.hchip:hover, .hchip--on { border-color: #3a4150; }
+.hchip__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat__kbd { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.chat__scrim { position: fixed; inset: 0; z-index: 19; }
+.chat__panel { position: absolute; right: 16px; top: calc(100% + 4px); z-index: 20; width: 380px; max-width: calc(100vw - 24px); }
+.chat__panel .preview__menu, .chat__panel .wt__menu { position: static; width: auto; max-width: none; max-height: 70vh; overflow: auto; }
+.chat__panel .slash { margin: 0; max-width: none; max-height: 75vh; box-shadow: 0 10px 30px rgba(0,0,0,.45); }
+.amenu__group { font-size: 11px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; padding: 8px 8px 2px; }
+.amenu__item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0; border-radius: 6px; color: var(--text); padding: 7px 8px; cursor: pointer; font: inherit; }
+.amenu__item:hover:not(:disabled), .amenu__item--sel { background: var(--bg3); }
+.amenu__item:disabled { opacity: .45; cursor: default; }
+.amenu__icon { width: 20px; text-align: center; flex-shrink: 0; }
+.amenu__text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.amenu__hint { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amenu__state { font-size: 12px; color: var(--muted); flex-shrink: 0; }
+.amenu__state--on { color: var(--ok); }
+.amenu__item--danger .amenu__label { color: var(--err); }
+.amenu__sep { height: 1px; background: var(--line); margin: 4px 6px; }
+.params { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.params__row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.params__row > span:first-child { width: 110px; color: var(--muted); flex-shrink: 0; }
+.params__row .select { flex: 1; min-width: 0; padding: 5px 8px; }
+.chat__pills { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 16px; border-bottom: 1px solid var(--line); background: var(--bg2); }
+.hpill { font: inherit; font-size: 12px; padding: 2px 9px; border-radius: 999px; background: rgba(76,195,138,.1); color: var(--ok); border: 1px solid rgba(76,195,138,.3); cursor: pointer; }
+.hpill:hover { border-color: var(--ok); }
+
+/* палитра команд (Ctrl+K) */
+.palette__scrim { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.45); }
+.palette { position: fixed; z-index: 41; top: 12vh; left: 50%; transform: translateX(-50%); width: 520px; max-width: calc(100vw - 24px); background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; padding: 8px; box-shadow: 0 16px 40px rgba(0,0,0,.5); }
+.palette__list { margin-top: 6px; max-height: 55vh; overflow-y: auto; }
+.palette__empty { margin: 8px; font-size: 13px; }
+.palette__keys { font-size: 11px; padding: 6px 4px 0; }
+
+@media (max-width: 760px) {
+  .chat__head { flex-wrap: wrap; row-gap: 8px; padding: 8px 10px; }
+  .hchip { order: 10; flex-basis: 100%; max-width: none; }
+  .chat__project, .chat__kbd { display: none; }
+  .chat__panel { left: 8px; right: 8px; width: auto; max-width: none; }
+  .chat__pills { padding: 6px 10px; }
+}

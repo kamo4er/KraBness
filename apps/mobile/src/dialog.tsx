@@ -61,7 +61,7 @@ export function DialogHost() {
     <Modal visible transparent animationType="fade" statusBarTranslucent onRequestClose={() => close(cancel)}>
       <Pressable style={[st.backdrop, menu ? st.bottom : st.center]} onPress={() => close(cancel)}>
         {menu ? (
-          <Pressable style={[st.sheet, { paddingBottom: insets.bottom + 12 }]} onPress={() => {}}>
+          <Pressable style={[st.sheet, { paddingBottom: insets.bottom + 12, maxHeight: "92%" }]} onPress={() => {}}>
             <View style={st.handle} />
             <Text style={st.title}>{cur.title}</Text>
             {cur.message ? (
@@ -69,7 +69,8 @@ export function DialogHost() {
                 <Text style={st.message}>{cur.message}</Text>
               </ScrollView>
             ) : null}
-            <View style={{ marginTop: 6 }}>
+            {/* длинное меню (⋯ в чате — до 9 пунктов) при крупном шрифте не влезает: пункты листаются, «Закрыть» остаётся */}
+            <ScrollView style={{ marginTop: 6, flexGrow: 0, flexShrink: 1 }}>
               {actions.map((b) => (
                 <Pressable key={b.text} style={({ pressed }) => [st.row, pressed && st.pressed]} onPress={() => close(b)}>
                   <View style={[st.icon, b.style === "destructive" && st.iconDanger]}>
@@ -81,7 +82,7 @@ export function DialogHost() {
                   </View>
                 </Pressable>
               ))}
-            </View>
+            </ScrollView>
             <Pressable style={({ pressed }) => [st.btn, st.btnGhost, { marginTop: 10 }, pressed && st.pressed]} onPress={() => close(cancel)}>
               <Text style={st.btnText}>{cancel?.text ?? t("Закрыть", "Close")}</Text>
             </Pressable>
