@@ -9,8 +9,13 @@ export function pickLang(locale?: string): Lang {
   return /^ru([-_]|$)/i.test(locale ?? "") ? "ru" : "en";
 }
 
-/** локаль системы, где запущен код (Node, браузер, Hermes) */
+/**
+ * локаль системы, где запущен код (Node, браузер, Hermes). KRABNESS_LOCALE в окружении Node важнее: на Windows Node
+ * не смотрит на LANG, а тестам хаба с русскими строками нужна русская локаль и на чистой машине (CI на английской Windows)
+ */
 export function systemLocale(): string {
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.KRABNESS_LOCALE;
+  if (env) return env;
   try {
     return Intl.DateTimeFormat().resolvedOptions().locale;
   } catch {

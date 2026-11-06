@@ -1,14 +1,18 @@
-// Страница для WebView с диаграммой mermaid: та же библиотека и тема, что в вебе, только с CDN.
+// Страница для WebView с диаграммой mermaid: та же библиотека и тема, что в вебе; библиотека с хаба, запасной путь — CDN.
 // Отвечает приложению одним сообщением: {h} — высота нарисованной диаграммы или {error, load}.
 // Без top-level await и прочего нового синтаксиса в самой странице: на старом WebView (Chrome 68 на MEmu)
 // он ронял скрипт молча, и карточка висела на «Рисую…». Сам mermaid там не грузится — тогда придёт ошибка загрузки.
 
 export const MERMAID_URL = "https://cdn.jsdelivr.net/npm/mermaid@12.2.0/dist/mermaid.esm.min.mjs";
 
-/** fit — в ленте: по ширине экрана, без зума; иначе натуральный размер, прокрутка и щипок */
-export function mermaidPage(source: string, fit = true): string {
+/**
+ * fit — в ленте: по ширине экрана, без зума; иначе натуральный размер, прокрутка и щипок.
+ * hub — адрес хаба: библиотека сначала с него (рисует и без интернета, если есть Tailscale), не вышло — с CDN.
+ */
+export function mermaidPage(source: string, fit = true, hub?: string): string {
   // исходник — данными, а не разметкой: </script> внутри диаграммы не закроет скрипт
   const src = JSON.stringify(source).replace(/</g, "\\u003c");
+  const urls = JSON.stringify([...(hub ? [`${hub.replace(/\/$/, "")}/vendor/mermaid/mermaid.esm.min.mjs`] : []), MERMAID_URL]).replace(/</g, "\\u003c");
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1${fit ? ",user-scalable=no" : ""}">
 <style>html,body{margin:0;background:#111318;color:#e6e8ee;font:13px system-ui,sans-serif}#d{padding:8px;overflow-x:auto}#d svg{display:block;${fit ? "max-width:100%;height:auto" : "max-width:none"}}</style></head>
 <body><div id="d"></div><script>
@@ -16,7 +20,11 @@ function post(m) { window.ReactNativeWebView.postMessage(JSON.stringify(m)); }
 var loaded = false;
 function fail(e, load) { post({ error: String((e && e.message) || e), load: load }); }
 try {
-  import(${JSON.stringify(MERMAID_URL)}).then(function (mod) {
+  var urls = ${urls};
+  // хаб не ответил за 4 с (ПК спит, а Tailscale включён) — сразу CDN, а не ждать до таймаута карточки
+  var soon = function (p, ms) { return new Promise(function (res, rej) { var t = setTimeout(function () { rej(new Error("timeout")); }, ms); p.then(function (v) { clearTimeout(t); res(v); }, function (e) { clearTimeout(t); rej(e); }); }); };
+  var load = function (i) { var last = i + 1 >= urls.length; var p = import(urls[i]); return (last ? p : soon(p, 4000)).catch(function (e) { if (!last) return load(i + 1); throw e; }); };
+  load(0).then(function (mod) {
     loaded = true;
     var mermaid = mod.default;
     mermaid.initialize({ startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true, theme: "base", darkMode: true,

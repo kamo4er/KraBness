@@ -5,32 +5,39 @@
 // Ошибки страницы перехватывает скрипт из artifactDocument и шлёт сюда postMessage — только текст.
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { artifactDocument, artifactError, artifactFixPrompt, isRunnablePage, t } from "@kamharn/client";
+import { artifactDocument, artifactError, artifactFixPrompt, artifactHeight, isRunnablePage, t } from "@kamharn/client";
 
 /** пока агент дописывает ответ, блок растёт — запускаем, когда он не менялся столько */
 const SETTLE_MS = 1200;
 const SANDBOX = "allow-scripts allow-pointer-lock";
+/** высота карточки по странице — в этих пределах; не сообщила — 380 px из CSS */
+const MIN_H = 160;
+const MAX_H = 640;
+const DEFAULT_H = 380;
 
 /** Отправить текст агенту этой сессии (кнопка «Отправить агенту» у ошибки страницы); нет — кнопки нет. */
 export const ArtifactSendCtx = createContext<((text: string) => void) | undefined>(undefined);
 
-function Frame({ source, nonce, className, onError }: { source: string; nonce: number; className: string; onError?: (message: string) => void }) {
+function Frame({ source, nonce, className, onError, onHeight, height }: { source: string; nonce: number; className: string; onError?: (message: string) => void; onHeight?: (h: number) => void; height?: number }) {
   const ref = useRef<HTMLIFrameElement>(null);
   useEffect(() => {
-    if (!onError) return;
+    if (!onError && !onHeight) return;
     // слушаем только свой iframe: в чате бывает несколько страниц
     const onMessage = (e: MessageEvent) => {
       if (e.source !== ref.current?.contentWindow) return;
       const m = artifactError(e.data);
-      if (m) onError(m);
+      if (m) onError?.(m);
+      const h = artifactHeight(e.data);
+      if (h) onHeight?.(h);
     };
     addEventListener("message", onMessage);
     return () => removeEventListener("message", onMessage);
-  }, [onError]);
+  }, [onError, onHeight]);
   return (
     <iframe
       ref={ref}
       key={nonce}
+      style={height ? { height } : undefined}
       className={className}
       title={t("Живой результат", "Live result")}
       sandbox={SANDBOX}
@@ -127,13 +134,72 @@ export function ArtifactCard({ source, title, autoRun }: { source: string; title
   const [full, setFull] = useState(false);
   const [forced, setForced] = useState(false);
   const [error, onError, clearError] = useFirstError();
+  const [height, setHeight] = useState<number>();
+  const [visible, setVisible] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const timer = setTimeout(() => setReady(source), SETTLE_MS);
     return () => clearTimeout(timer);
   }, [source]);
+  const run = autoRun || forced || isRunnablePage(source);
+  // работает только видимая страница: десять сцен three.js в истории — десять WebGL-контекстов, браузер начал бы их терять.
+  // Карточка появляется (run) не сразу: страница приходит потоком, а кусок вёрстки запускают кнопкой — поэтому зависимость от run.
+  // root — лента чата: запас rootMargin расширяет только root, а обрезает прокручиваемая лента внутри окна
+  useEffect(() => {
+    const el = box.current;
+    if (!run || !el) return;
+    if (typeof IntersectionObserver === "undefined") return void setVisible(true);
+    const io = new IntersectionObserver(([e]) => setVisible(!!e?.isIntersecting), { root: el.closest(".chat__scroll"), rootMargin: "300px 0px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [run]);
+  // Высота по странице. Страница на 100vh своей высоты не имеет: она всегда «карточка + отступ» и росла бы вслед за ней.
+  // Два замера подряд с одинаковым превышением над карточкой — подозрение; проверяем, не меняя карточку: страница сама
+  // не выросла за 1,5 с — привязана к окну (обычные 380 px и больше не трогаем), выросла — просто растёт (лог, список)
+  const fit = useRef<{ frame: number; over?: number; frozen?: boolean; probe?: { frame: number; over: number; timer: ReturnType<typeof setTimeout> } }>({ frame: DEFAULT_H });
+  const apply = (h: number) => {
+    const f = fit.current;
+    f.over = h - f.frame;
+    f.frame = Math.min(MAX_H, Math.max(MIN_H, h));
+    setHeight(f.frame);
+  };
+  const onHeight = useCallback((h: number) => {
+    const f = fit.current;
+    if (f.frozen) return;
+    if (f.probe) {
+      // проверка: карточке дали другую высоту; страница сдвинулась ровно вслед — привязана к окну
+      const p = f.probe;
+      clearTimeout(p.timer);
+      f.probe = undefined;
+      if (Math.abs(h - (p.frame + p.over)) <= 2) {
+        f.frozen = true;
+        f.frame = DEFAULT_H;
+        return setHeight(undefined);
+      }
+      f.over = undefined;
+      return apply(h);
+    }
+    const over = h - f.frame;
+    if (over > 0 && f.over !== undefined && Math.abs(over - f.over) <= 2) {
+      // подозрение: два одинаковых превышения подряд. Ровно растущая страница (лог) даёт то же самое, поэтому
+      // проверяем делом — карточке нарочно другая высота (+37): привязанная к окну сдвинется следом, обычная — нет
+      const test = Math.min(MAX_H, h + 37);
+      f.probe = { frame: test, over, timer: setTimeout(() => ((f.probe = undefined), apply(h)), 1500) };
+      f.frame = test;
+      return setHeight(test);
+    }
+    apply(h);
+  }, []);
+  // новая страница (поток дописал блок) или ↻ — подгонка заново
+  const refit = () => {
+    if (fit.current.probe) clearTimeout(fit.current.probe.timer);
+    fit.current = { frame: DEFAULT_H };
+    setHeight(undefined);
+  };
+  useEffect(() => refit, []);
+  useEffect(refit, [source]);
   // запускаем только устоявшийся исходник: недописанная страница не мигает ошибками и не дёргает CDN на каждую дельту
   const live = ready === source;
-  const run = autoRun || forced || isRunnablePage(source);
   if (!run) {
     return (
       <div className="artifact" data-artifact data-artifact-code>
@@ -151,16 +217,21 @@ export function ArtifactCard({ source, title, autoRun }: { source: string; title
     );
   }
   return (
-    <div className="artifact" data-artifact>
+    <div className="artifact" data-artifact ref={box}>
       <div className="artifact__bar">
         <span className="muted artifact__title">✨ {title ?? t("Живой результат", "Live result")}</span>
-        <Tools source={source} code={code} onCode={() => setCode(!code)} onRestart={() => (clearError(), setNonce(nonce + 1))} onFull={() => setFull(true)} />
+        <Tools source={source} code={code} onCode={() => setCode(!code)} onRestart={() => (clearError(), refit(), setNonce(nonce + 1))} onFull={() => setFull(true)} />
       </div>
       {error && !code && <ErrorBar error={error} />}
       {code ? (
         <pre className="pre artifact__code">{source}</pre>
+      ) : live && visible ? (
+        <Frame source={source} nonce={nonce} className="artifact__frame" onError={onError} onHeight={onHeight} height={height} />
       ) : live ? (
-        <Frame source={source} nonce={nonce} className="artifact__frame" onError={onError} />
+        // вне экрана — выгружена; место держим той же высоты, чтобы лента не прыгала
+        <div className="artifact__wait muted" style={{ height: height ?? DEFAULT_H }} data-artifact-paused>
+          ⏸ {t("на паузе, пока не видно", "paused while off-screen")}
+        </div>
       ) : (
         <div className="artifact__wait muted">{t("Собираю…", "Assembling…")}</div>
       )}

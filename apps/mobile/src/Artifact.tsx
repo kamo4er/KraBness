@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { artifactDocument, artifactError, artifactFixPrompt, isRunnablePage, t } from "@kamharn/client";
 import { copyText } from "./copy.tsx";
 import { mermaidPage } from "./mermaidPage.ts";
+import { client } from "./store.ts";
 import { Btn } from "./ui.tsx";
 import { C, S, mono } from "./theme.ts";
 
@@ -33,6 +34,8 @@ function navigate(r: ShouldStartLoadRequest): boolean {
 
 /** Отправить текст агенту этой сессии (кнопка «Отправить агенту» у ошибки страницы); нет — кнопки нет. */
 export const ArtifactSendCtx = createContext<((text: string) => void) | undefined>(undefined);
+/** Сообщение с карточкой сейчас на экране (ставит лента чата). Вне экрана WebView не держим: десяток сцен в истории — десяток браузеров в памяти */
+export const ArtifactVisibleCtx = createContext(true);
 
 /** Мост WebView — только для текста ошибки (перехватчик из artifactDocument); больше страница ничего передать не может. */
 function Page({ html, nonce, style, onError }: { html: string; nonce: number; style: object; onError?: (message: string) => void }) {
@@ -142,6 +145,7 @@ export function ArtifactFull({ source, title, onClose }: { source: string; title
 /** Карточка в ответе агента. autoRun — запускать даже кусок вёрстки (присланный .html-файл). */
 export function ArtifactCard({ source, title, autoRun }: { source: string; title?: string; autoRun?: boolean }) {
   const live = useSettled(source);
+  const onScreen = useContext(ArtifactVisibleCtx);
   const [nonce, setNonce] = useState(0);
   const [code, setCode] = useState(false);
   const [full, setFull] = useState(false);
@@ -175,6 +179,11 @@ export function ArtifactCard({ source, title, autoRun }: { source: string; title
         // в полноэкранном режиме карточку не держим: две копии тяжёлой 3D-сцены телефону ни к чему
         full ? (
           <View style={st.frame} />
+        ) : !onScreen ? (
+          // вне экрана — заглушка той же высоты, лента не прыгает
+          <View style={[st.frame, st.paused]}>
+            <Text style={S.muted}>⏸ {t("на паузе, пока не видно", "paused while off-screen")}</Text>
+          </View>
         ) : (
           // в ленте страница только показывается: иначе WebView забирает свайп и чат не листается; играть — на весь экран
           <Pressable onPress={() => setFull(true)}>
@@ -307,7 +316,7 @@ function MermaidView({ source, fit, onMessage, style }: { source: string; fit: b
   return (
     <WebView
       style={[{ backgroundColor: "#111318" }, style]}
-      source={{ html: mermaidPage(source, fit) }}
+      source={{ html: mermaidPage(source, fit, client?.baseUrl) }}
       originWhitelist={["*"]}
       onShouldStartLoadWithRequest={navigate}
       // мост нужен только для высоты и ошибки
@@ -328,6 +337,7 @@ const st = StyleSheet.create({
   title: { flex: 1, fontSize: 13 },
   tools: { flexDirection: "row", gap: 2 },
   frame: { height: 360, backgroundColor: "#fff" },
+  paused: { backgroundColor: C.bg, alignItems: "center", justifyContent: "center" },
   wait: { padding: 16, textAlign: "center" },
   open: { position: "absolute", right: 8, bottom: 8, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, overflow: "hidden", backgroundColor: "rgba(0,0,0,0.6)", color: "#fff", fontSize: 12 },
   screen: { flex: 1, backgroundColor: C.bg },

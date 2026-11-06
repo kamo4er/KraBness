@@ -38,6 +38,9 @@ test("документ артефакта: фрагмент оборачивае
   assert.equal(ownDoc.replace(HOOK, ""), own, "свои charset и viewport не трогаем, добавлен только перехватчик");
   assert.match(ownDoc, /^<html><head><script>/);
   assert.match(artifactDocument("<html><body>x</body></html>"), /^<html><head><meta charset="utf-8">/);
+  // «$&», «$1» в тексте страницы — не шаблон замены
+  const dollars = '<html><head lang="x"><title>$& $1</title></head><body>$`</body></html>';
+  assert.equal(artifactDocument(dollars).replace(HOOK, "").replace(/<meta[^>]+>/g, ""), dollars);
 });
 
 test("что запускается само: целая страница или скрипт/графика; кусок вёрстки — кодом", () => {

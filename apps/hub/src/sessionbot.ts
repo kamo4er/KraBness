@@ -8,7 +8,7 @@ import { createReadStream } from "node:fs";
 import { basename } from "node:path";
 import { Readable } from "node:stream";
 import type { ReadableStream as WebStream } from "node:stream/web";
-import type { QuestionRequest, SessionBotInfo, StoredEvent } from "@kamharn/protocol";
+import { isArtifactLang, isRunnablePage, pageDocument, type QuestionRequest, type SessionBotInfo, type StoredEvent } from "@kamharn/protocol";
 import type { ConfigStore, SessionBotConfig } from "./config.ts";
 import type { FileStore } from "./files.ts";
 import { L } from "./lang.ts";
@@ -24,6 +24,23 @@ const GATHER_MS = 1200;
 const TG_TEXT_MAX = 4000;
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/**
+ * Живые страницы из ответа — файлами: ```html с целой страницей в Telegram был бы простынёй кода на несколько сообщений.
+ * Кусок вёрстки (правка шаблона) остаётся кодом — так же решает карточка в чате (isRunnablePage).
+ */
+export function splitPages(md: string): { text: string; pages: Array<{ name: string; html: string }> } {
+  const pages: Array<{ name: string; html: string }> = [];
+  // заборы — только с начала строки: «```» внутри кода страницы (строка в скрипте) блок не закрывает
+  const text = md.replace(/^```([^\n`]*)\r?\n([\s\S]*?)^```[ \t]*$/gm, (whole, info: string, code: string) => {
+    if (!isArtifactLang(info.trim().split(/\s+/)[0]) || !isRunnablePage(code)) return whole;
+    const name = `page-${pages.length + 1}.html`;
+    // как в карточке чата: кодировка и viewport, иначе с телефона откроется мелко, «как на ПК»
+    pages.push({ name, html: pageDocument(code) });
+    return L(`✨ Живая страница: ${name} во вложении, открой в KraBness или в браузере.`, `✨ Live page: ${name} is attached, open it in KraBness or in a browser.`);
+  });
+  return { text, pages };
+}
 
 /** Markdown ответа агента → HTML, который понимает Telegram (жирный, код, ссылки, заголовки; списки — точками). */
 export function mdToTelegram(md: string): string {
@@ -305,7 +322,7 @@ class SessionBot {
       const part = ev.part;
       if (part.type === "file" && !files.some((f) => f.fileId === part.fileId)) files.push({ fileId: part.fileId, name: part.name });
     }
-    const answer = last ? [...texts.get(last)!.values()].join("\n\n").trim() : "";
+    const { text: answer, pages } = splitPages(last ? [...texts.get(last)!.values()].join("\n\n").trim() : "");
     for (const chat of to) {
       if (!this.allowed(chat)) continue; // отключили, пока агент думал
       for (const part of chunks(answer)) {
@@ -315,6 +332,8 @@ class SessionBot {
         );
       }
       for (const f of files) await this.sendFile(chat, f.fileId).catch((e: Error) => this.api("sendMessage", { chat_id: chat, text: `⚠️ ${f.name}: ${e.message}` }).catch(() => {}));
+      for (const p of pages)
+        await this.sendDocument(chat, Buffer.from(p.html, "utf8"), "text/html", p.name).catch((e: Error) => this.api("sendMessage", { chat_id: chat, text: `⚠️ ${p.name}: ${e.message}` }).catch(() => {}));
     }
   }
 
@@ -323,13 +342,17 @@ class SessionBot {
     const row = this.parent.files.get(fileId);
     if (!row) throw new Error(L("файл не найден", "file not found"));
     if (row.size > 50 * 1024 * 1024) throw new Error(L("больше 50 МБ — Telegram не принимает от ботов, открой в KraBness", "over 50 MB — Telegram doesn't accept it from bots, open it in KraBness"));
-    const form = new FormData();
-    form.set("chat_id", String(chat));
     const buf = await new Promise<Buffer>((res, rej) => {
       const parts: Buffer[] = [];
       createReadStream(row.path).on("data", (d) => parts.push(d as Buffer)).on("end", () => res(Buffer.concat(parts))).on("error", rej);
     });
-    form.set("document", new Blob([new Uint8Array(buf)], { type: row.mime }), row.name || basename(row.path));
+    await this.sendDocument(chat, buf, row.mime, row.name || basename(row.path));
+  }
+
+  private async sendDocument(chat: number, buf: Buffer, mime: string, name: string): Promise<void> {
+    const form = new FormData();
+    form.set("chat_id", String(chat));
+    form.set("document", new Blob([new Uint8Array(buf)], { type: mime }), name);
     const r = await this.http.fetch(`https://api.telegram.org/bot${this.cfg.token}/sendDocument`, { method: "POST", body: form });
     const j = (await r.json().catch(() => ({}))) as Json;
     if (!j.ok) throw new Error(j.description ?? `Telegram ${r.status}`);

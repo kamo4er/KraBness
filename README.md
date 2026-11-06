@@ -5,10 +5,11 @@
 <p align="center"><b>Your AI coding agents run on your PC. You drive them from your phone.</b><br>
 And they keep going when Claude hits its limit.</p>
 
-<p align="center"><a href="README.ru.md">Русская версия</a></p>
+<p align="center"><a href="README.ru.md">Русская версия</a> · <a href="CHANGELOG.md">Changelog</a><br>
+<a href="https://github.com/kamo4er/KraBness/actions/workflows/test.yml"><img src="https://github.com/kamo4er/KraBness/actions/workflows/test.yml/badge.svg" alt="Tests"></a></p>
 
 <p align="center">
-  <img src="docs/screenshots/demo.gif" width="300" alt="A task comes from the PC, the agent asks to edit a file, Allow on the phone, tests pass">
+  <img src="docs/screenshots/demo.gif" width="100%" alt="The same chat on the PC and on the phone: a task typed at the PC, the agent asks to edit a file on both, Allow is tapped on the phone, tests pass">
 </p>
 
 - **A remote for your agents.** [Claude Code](https://claude.com/claude-code) or [opencode](https://opencode.ai) works on your PC. Approvals, questions and files reach you on the phone, in the browser or in Telegram. Start at your desk, approve from the couch, read the result on the bus.

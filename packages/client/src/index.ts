@@ -61,7 +61,7 @@ export { splitArgs, joinArgs, parsePairs } from "./args.ts";
 export { ago, baseName, fmtTokens, fmtCost, localDay } from "./format.ts";
 export { parseFileRef, resolveFileRef, type FileRef } from "./paths.ts";
 export { mentionAt, mentionText, applyMention } from "./mention.ts";
-export { ARTIFACT_ERROR_MAX, artifactDocument, artifactError, artifactFixPrompt, artifactSource, isArtifactFile, isArtifactLang, isRunnablePage } from "./artifact.ts";
+export { ARTIFACT_ERROR_MAX, artifactDocument, artifactError, artifactFixPrompt, artifactHeight, artifactSource, isArtifactFile, isArtifactLang, isRunnablePage } from "./artifact.ts";
 export { engineUsable, engineName, modelKey, parseModelKey, modelOptions, optionReady, defaultTaskModels, brainOptions, brainDownText, computerHint, goalBeyondTitle, fileKind, type EngineModelOption } from "./taskModels.ts";
 export { t, tn, locale, getLang, getLangSetting, applyLangSetting, onLangChange } from "./i18n.ts";
 export { lineDiff, type DiffRow } from "./diff.ts";

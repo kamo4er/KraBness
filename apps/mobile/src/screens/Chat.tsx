@@ -1,5 +1,5 @@
 // Чат сессии: стрим сообщений, инструменты, подтверждения, смена модели и режима, отправка и остановка.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, FlatList, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View, type TextInputInstance } from "react-native";
 import { limitView, resolveFileRef, sessionActions, sessionSummary, type FileRef, type ClaudeLimits, type ListeningPort, type MessageView, type PermissionMode, type SessionActionId, type SessionInfo, type SlashCommand, type FileHit, t, locale } from "@kamharn/client";
 import { client, fmtSize, useEngines, useHub, useQuickPrompts } from "../store.ts";
@@ -19,7 +19,7 @@ import { pickOpencodeModel } from "../modelPick.tsx";
 import { SessionUsage } from "../Usage.tsx";
 import { MentionList, useMention } from "../mention.tsx";
 import { CopyActions, copyableText } from "../copy.tsx";
-import { ArtifactSendCtx } from "../Artifact.tsx";
+import { ArtifactSendCtx, ArtifactVisibleCtx } from "../Artifact.tsx";
 
 /** Автопроверка с телефона: включить с командами проекта (сохранёнными или предложенными), прогнать сейчас. Править команды удобнее в вебе. */
 async function checksMenu(id: string, on: boolean): Promise<void> {
@@ -56,6 +56,14 @@ export function Chat({ id }: { id: string }) {
   const [hit, setHit] = useState(0);
   const matchesRef = useRef<number[]>([]);
   const [showOld, setShowOld] = useState(false);
+  // какие сообщения на экране: живые страницы вне экрана WebView не держат (FlatList хочет постоянные колбэк и настройки)
+  const [onScreen, setOnScreen] = useState<ReadonlySet<string>>(new Set());
+  // тот же набор — без нового Set: иначе каждый сдвиг ленты перерисовывал бы весь чат
+  const onViewable = useRef(({ viewableItems }: { viewableItems: Array<{ key?: string }> }) => {
+    const next = viewableItems.flatMap((v) => (v.key ? [v.key] : []));
+    setOnScreen((cur) => (next.length === cur.size && next.every((k) => cur.has(k)) ? cur : new Set(next)));
+  });
+  const viewability = useRef({ itemVisiblePercentThreshold: 1 });
   // режим «Разговор»: агент закончил ход — начало ответа звучит вслух
   const talk = useTalk(id, info?.kind === "dispatcher");
   const wasBusy = useRef(false);
@@ -154,7 +162,14 @@ export function Chat({ id }: { id: string }) {
         maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: 60 }}
         data={messages}
         keyExtractor={(m) => m.info.id}
-        renderItem={({ item }) => <Message m={item} highlight={item.info.id === highlightId} />}
+        renderItem={({ item }) => (
+          <ArtifactVisibleCtx.Provider value={onScreen.has(item.info.id)}>
+            <Message m={item} highlight={item.info.id === highlightId} />
+          </ArtifactVisibleCtx.Provider>
+        )}
+        extraData={onScreen}
+        onViewableItemsChanged={onViewable.current}
+        viewabilityConfig={viewability.current}
         contentContainerStyle={st.messages}
         keyboardShouldPersistTaps="handled"
         onScroll={(e) => setShowDown(e.nativeEvent.contentOffset.y > 400)}
@@ -401,7 +416,8 @@ function SpeakButton({ m }: { m: MessageView }) {
   );
 }
 
-function Message({ m, highlight }: { m: MessageView; highlight?: boolean }) {
+// memo: смена видимых сообщений и прочие обновления ленты не перерисовывают неизменившиеся
+const Message = memo(function Message({ m, highlight }: { m: MessageView; highlight?: boolean }) {
   if (highlight) {
     return (
       <View style={st.hit}>
@@ -441,7 +457,7 @@ function Message({ m, highlight }: { m: MessageView; highlight?: boolean }) {
       </View>
     </View>
   );
-}
+});
 
 /** opencode получает список вложений в тексте — пользователю его показывать не нужно */
 function stripAttachmentNote(text: string): string {

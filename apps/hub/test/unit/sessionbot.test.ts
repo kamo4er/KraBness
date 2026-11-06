@@ -10,7 +10,7 @@ import { ConfigStore } from "../../src/config.ts";
 import { Db } from "../../src/db.ts";
 import { FileStore, FILE_MARKER } from "../../src/files.ts";
 import { SessionManager } from "../../src/sessions.ts";
-import { SessionBots, chunks, mdToTelegram } from "../../src/sessionbot.ts";
+import { SessionBots, chunks, mdToTelegram, splitPages } from "../../src/sessionbot.ts";
 import type { Engine, EngineSink, PromptFile } from "../../src/engines/types.ts";
 
 const TOKEN = "123456:" + "A".repeat(35);
@@ -300,4 +300,50 @@ test("бот сессии: при старте нет связи — имя бо
   for (let i = 0; i < 400 && !bots.info(s.id).bot; i++) await tick(20);
   assert.equal(bots.info(s.id).bot, "alisa_health_bot");
   assert.equal(bots.info(s.id).error, undefined);
+});
+
+test("живая страница в Telegram: целая страница — файлом page-N.html, кусок вёрстки — кодом", () => {
+  const page = "<!doctype html><html><body><canvas id=c></canvas><script>draw()</script></body></html>";
+  const md = `Смотри:\n\n\`\`\`html\n${page}\n\`\`\`\n\nИ правка шаблона:\n\n\`\`\`html\n<div class="card">{{ title }}</div>\n\`\`\`\n\nИ ещё одна:\n\n\`\`\`HTML\n<svg viewBox="0 0 1 1"></svg>\n\`\`\``;
+  const { text, pages } = splitPages(md);
+  assert.deepEqual(pages.map((p) => p.name), ["page-1.html", "page-2.html"]);
+  assert.match(pages[0]!.html, /^<!doctype html><html><head><meta charset="utf-8"><meta name="viewport"[^>]+><\/head><body><canvas/, "файл с кодировкой и viewport — с телефона не мелко");
+  assert.match(pages[0]!.html, /<script>draw\(\)<\/script>/);
+  assert.doesNotMatch(text, /<canvas|<svg/, "кода страниц в тексте нет");
+  assert.match(text, /page-1\.html/);
+  assert.match(text, /page-2\.html/);
+  assert.match(text, /```html\n<div class="card">\{\{ title \}\}<\/div>\n```/, "кусок вёрстки остался кодом");
+  // без страниц — текст как есть
+  assert.deepEqual(splitPages("просто **текст** и `код`"), { text: "просто **текст** и `код`", pages: [] });
+  // «```» внутри кода страницы блок не закрывает; язык с атрибутами — тоже страница; $& в тексте не шаблон
+  const tricky = splitPages('Вот:\n\n```html title=demo\n<script>const f = "```"; document.title = "$&";</script>\n```\n\nконец');
+  assert.equal(tricky.pages.length, 1);
+  assert.match(tricky.pages[0]!.html, /const f = "```"; document\.title = "\$&";<\/script>/);
+  assert.match(tricky.text, /^Вот:\n\n✨ .*page-1\.html.*\n\nконец$/);
+  // CRLF
+  assert.equal(splitPages("```html\r\n<svg></svg>\r\n```").pages.length, 1);
+});
+
+test("бот сессии: страница из ответа уходит документом, в сообщении — пометка вместо кода", async (t) => {
+  const { bots, s, sink, msg, sent, waitFor, prompts } = await setup();
+  t.after(() => bots.close());
+  const info = await bots.setToken(s.id, TOKEN);
+  msg(11, { text: `/start ${info.code}` });
+  await waitFor(() => bots.info(s.id).chats.length === 1, "привязки");
+  msg(11, { text: "нарисуй график" });
+  await waitFor(() => prompts.length === 1, "промпта");
+  const ev = (e: SessionEvent) => sink().event("es1", e);
+  ev({ type: "session.updated", patch: { status: "busy" } });
+  ev({ type: "message.upserted", message: { id: "a1", role: "assistant", createdAt: 1 } });
+  ev({ type: "part.upserted", messageId: "a1", part: { type: "text", id: "t1", text: "Вот:\n\n```html\n<!doctype html><html><body><h1>График</h1></body></html>\n```\n\nОткрой." } });
+  ev({ type: "session.updated", patch: { status: "idle" } });
+  await waitFor(() => sent("sendDocument").length === 1, "документа");
+  const doc = sent("sendDocument")[0]!.body as FormData;
+  const file = doc.get("document") as File;
+  assert.equal(file.name, "page-1.html");
+  assert.match(await file.text(), /<h1>График<\/h1>/);
+  const texts = sent("sendMessage").filter((c) => c.body.parse_mode === "HTML").map((c) => String(c.body.text));
+  assert.equal(texts.length, 1);
+  assert.doesNotMatch(texts[0]!, /doctype|&lt;h1/i, "кода страницы в сообщении нет");
+  assert.match(texts[0]!, /page-1\.html/);
 });

@@ -826,6 +826,7 @@ export interface SessionBotInfo {
   error?: string;
 }
 export * from "./speech.ts";
+export * from "./artifact.ts";
 
 
 /** Голос на ПК (apps/hub/src/voice.ts, voice/main.py): слово-активатор → Whisper → Диспетчер → ответ вслух. */

@@ -29,6 +29,8 @@ export interface OpencodeOptions {
   customProviders?: () => CustomProvider[];
   /** свои MCP-серверы KamHarn (раздел mcp конфига opencode), читается при каждом запуске */
   extraMcp?: () => Record<string, unknown>;
+  /** дополнительные переменные окружения процесса opencode (читаются при каждом запуске) */
+  env?: () => Record<string, string>;
   /** избранные модели по провайдерам: в выборе модели только они (нет списка — все) */
   favorites?: () => Record<string, string[]>;
   /** сессии, где нельзя ответить «разрешать всегда» */
@@ -149,7 +151,7 @@ export class OpencodeEngine implements Engine {
       ...(Object.keys(provider).length ? { provider } : {}),
     };
     const child = spawn(bin, ["serve", "--hostname", "127.0.0.1", "--port", String(this.opts.port)], {
-      env: { ...process.env, OPENCODE_SERVER_PASSWORD: password, OPENCODE_CONFIG_CONTENT: JSON.stringify(extraConfig) },
+      env: { ...process.env, ...this.opts.env?.(), OPENCODE_SERVER_PASSWORD: password, OPENCODE_CONFIG_CONTENT: JSON.stringify(extraConfig) },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });

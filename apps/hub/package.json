@@ -7,7 +7,7 @@
     "start": "tsx src/main.ts",
     "dev": "tsx watch src/main.ts",
     "cli": "tsx src/cli.ts",
-    "test": "node --import tsx --test test/unit/*.test.ts",
+    "test": "node --env-file=test/unit/test.env --import tsx --test test/unit/*.test.ts",
     "test:integration": "node --import tsx --test --test-concurrency=1 test/integration/*.test.ts"
   },
   "dependencies": {

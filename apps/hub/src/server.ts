@@ -1024,11 +1024,24 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   // ---------- веб-UI ----------
 
+  // mermaid для страниц диаграмм в приложении: с хаба, а не с CDN — телефон рисует и без интернета, если есть Tailscale.
+  // Без токена: это общедоступная библиотека. CORS — страница диаграммы в WebView без происхождения, import() иначе откажет
+  const mermaidDir = join(REPO_ROOT, "node_modules", "mermaid", "dist");
+  if (existsSync(join(mermaidDir, "mermaid.esm.min.mjs"))) {
+    await app.register(fastifyStatic, {
+      root: mermaidDir,
+      prefix: "/vendor/mermaid/",
+      decorateReply: false,
+      maxAge: 86_400_000,
+      setHeaders: (res) => void res.header("access-control-allow-origin", "*"),
+    });
+  }
+
   if (deps.webDir && existsSync(join(deps.webDir, "index.html"))) {
     const webRoot = resolve(deps.webDir);
     await app.register(fastifyStatic, { root: webRoot, wildcard: false });
     app.setNotFoundHandler((req, reply) => {
-      if (req.method !== "GET" || req.url.startsWith("/api/") || req.url.startsWith("/ws")) return reply.code(404).send({ error: "Not found" });
+      if (req.method !== "GET" || req.url.startsWith("/api/") || req.url.startsWith("/ws") || req.url.startsWith("/vendor/")) return reply.code(404).send({ error: "Not found" });
       // wildcard: false знает только файлы, что были при старте; после `npm run web:build` у бандла новое имя —
       // ищем его на диске, иначе браузер получил бы index.html вместо JS и веб сломался бы до рестарта хаба
       let rel = "";

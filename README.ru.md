@@ -5,10 +5,11 @@
 <p align="center"><b>AI-агенты работают на твоём ПК. Управляешь ими с телефона.</b><br>
 И они не встают, когда у Claude кончился лимит.</p>
 
-<p align="center"><a href="README.md">English version</a></p>
+<p align="center"><a href="README.md">English version</a> · <a href="CHANGELOG.ru.md">История изменений</a><br>
+<a href="https://github.com/kamo4er/KraBness/actions/workflows/test.yml"><img src="https://github.com/kamo4er/KraBness/actions/workflows/test.yml/badge.svg" alt="Тесты"></a></p>
 
 <p align="center">
-  <img src="docs/screenshots/ru/demo.gif" width="300" alt="Задача пришла с ПК, агент просит разрешения на правку, «Разрешить» на телефоне, тесты прошли">
+  <img src="docs/screenshots/ru/demo.gif" width="100%" alt="Один чат на ПК и на телефоне: задачу пишут на ПК, агент просит разрешения на правку на обоих, «Разрешить» нажимают на телефоне, тесты прошли">
 </p>
 
 - **Пульт для агентов.** [Claude Code](https://claude.com/claude-code) или [opencode](https://opencode.ai) работает на твоём ПК. Подтверждения, вопросы и файлы приходят тебе на телефон, в браузер или в Telegram. Начал задачу за столом, разрешил команду с дивана, прочитал результат в автобусе.
