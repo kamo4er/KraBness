@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createWorktree, discardWorktree, mergeWorktree, removeWorktree, slugify, worktreeStatus } from "../../src/worktree.ts";
@@ -10,7 +10,8 @@ import { createWorktree, discardWorktree, mergeWorktree, removeWorktree, slugify
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
 function repo() {
-  const root = mkdtempSync(join(tmpdir(), "kamharn-wt-"));
+  // git отвечает каноничными путями: TEMP через junction или в 8.3-форме иначе не совпадёт с ожиданиями
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "kamharn-wt-")));
   const dir = join(root, "DemoGame");
   mkdirSync(join(dir, "app"), { recursive: true });
   git(dir, "init", "-q", "-b", "main");

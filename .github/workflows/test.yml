@@ -26,4 +26,8 @@ jobs:
           git config --global init.defaultBranch main
       - run: npm ci
       - run: npm run typecheck
+      # the runner's TEMP is in 8.3 form (C:\Users\RUNNER~1), git answers with long paths; runner.temp is long
       - run: npm test
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}

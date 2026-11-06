@@ -62,7 +62,9 @@ export async function createWorktree(directory: string, title: string, sessionId
   await git(top, ["worktree", "add", "-b", branch, path, base]);
   // без зависимостей в копии не идут ни тесты, ни tsc; не вышло — агент разберётся сам
   await linkDeps(top, path).catch(() => {});
-  return { worktree: { repo: top, path, branch, base }, directory: join(path, relative(top, resolve(directory))) };
+  // подпапку спрашиваем у git: relative(top, directory) врёт, если путь пришёл через junction или в 8.3-форме (RUNNER~1)
+  const prefix = (await git(directory, ["rev-parse", "--show-prefix"]).catch(() => "")).trim().replace(/\/+$/, "");
+  return { worktree: { repo: top, path, branch, base }, directory: join(path, prefix) };
 }
 
 /** Метка в node_modules копии: эту папку собрали мы, внутри только ссылки. */
@@ -100,6 +102,8 @@ const inside = (child: string, parent: string) => {
  */
 export async function linkDeps(top: string, path: string): Promise<number> {
   const kind = process.platform === "win32" ? "junction" : "dir";
+  // native раскрывает 8.3-имена: иначе пакет рабочей области «не внутри» проекта и ведёт в основную копию
+  const topReal = realpathSync.native(top);
   let linked = 0;
   for (const rel of depDirs(top)) {
     const dst = join(path, rel);
@@ -113,11 +117,11 @@ export async function linkDeps(top: string, path: string): Promise<number> {
       let target = src;
       try {
         if (lstatSync(src).isSymbolicLink()) {
-          const real = realpathSync(src);
+          const real = realpathSync.native(src);
           target = real;
           // пакет рабочей области → его копия рядом
-          if (inside(real, top) && !real.split(sep).includes("node_modules")) {
-            const own = join(path, relative(top, real));
+          if (inside(real, topReal) && !real.split(sep).includes("node_modules")) {
+            const own = join(path, relative(topReal, real));
             if (existsSync(own)) target = own;
           }
         } else if (!lstatSync(src).isDirectory()) return; // служебные файлы npm не нужны
