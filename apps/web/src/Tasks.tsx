@@ -1,6 +1,6 @@
 // Задачи: хаб сам ведёт работу от цели до отчёта (исполнитель → проверки → ревью → правки), а в конце спрашивает решение.
 import { useEffect, useState } from "react";
-import { defaultTaskModels, engineName, modelOptions, optionReady, parseModelKey, t, type EngineInfo, type EngineModelOption, type NewSessionPrefs, type TaskInfo, type TaskStep, tn } from "@kamharn/client";
+import { branchName, defaultTaskModels, engineName, fileKind, goalBeyondTitle, modelOptions, optionReady, parseModelKey, t, type EngineInfo, type EngineModelOption, type NewSessionPrefs, type TaskInfo, type TaskStep, tn } from "@kamharn/client";
 import { client, fmtTime, go, useEngines, useHub } from "./hub.ts";
 import { FolderPicker } from "./NewSession.tsx";
 import { EffortSelect } from "./Effort.tsx";
@@ -255,9 +255,10 @@ export function Task({ id }: { id: string }) {
         <section>
           <p>
             <b>{STATUS()[task.status]}</b> · <span className="mono muted">{task.directory}</span>
-            {task.worktree ? <span className="muted"> · {t("ветка", "branch")} <code>{task.worktree.branch}</code></span> : null}
+            {task.worktree ? <span className="muted"> · {t("ветка", "branch")} <code title={task.worktree.branch}>{branchName(task.worktree.branch)}</code></span> : null}
           </p>
-          <pre className="pre task__goal">{task.goal}</pre>
+          {/* цель целиком — только если заголовок её обрезал: иначе тот же текст дважды */}
+          {goalBeyondTitle(task) && <pre className="pre task__goal">{task.goal}</pre>}
           {task.error && <p className="error">{task.error}</p>}
           {task.asking && (
             <div className="tasks__askbox">
@@ -296,9 +297,10 @@ export function Task({ id }: { id: string }) {
                   {s.model ? <span className="muted"> · {s.model.modelId}</span> : null}
                   {s.note ? <span className="muted"> · {s.note}</span> : null}
                 </span>
+                {/* название сессии шага — тот же текст задачи, поэтому кнопка без него */}
                 {s.sessionId && (
-                  <button className="btn btn--small" onClick={() => go({ page: "session", id: s.sessionId! })}>
-                    {t("чат", "chat")}: {title(s.sessionId) || t("открыть", "open")}
+                  <button className="btn btn--small" title={title(s.sessionId)} onClick={() => go({ page: "session", id: s.sessionId! })}>
+                    {t("открыть чат", "open chat")}
                   </button>
                 )}
               </li>
@@ -318,7 +320,13 @@ export function Task({ id }: { id: string }) {
             {r.files.length > 0 && (
               <>
                 <p className="muted">{t("Изменённые файлы", "Changed files")}:</p>
-                <pre className="pre">{r.files.map((f) => `${f.status}\t${f.path}`).join("\n")}</pre>
+                <ul className="gitfiles">
+                  {r.files.map((f) => (
+                    <li key={f.path}>
+                      <span className={`gitstat gitstat--${fileKind(f.status)}`}>{f.status}</span> <span className="mono">{f.path}</span>
+                    </li>
+                  ))}
+                </ul>
               </>
             )}
             {r.review === "remarks" && r.reviewText && (

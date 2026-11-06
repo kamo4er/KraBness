@@ -1,12 +1,12 @@
 // Живой артефакт: блок ```html из ответа агента — работающая страница в карточке чата и на весь экран;
-// диаграммы ```mermaid. Страница живёт в своём WebView без моста (onMessage не задан): ей не видны ни токен,
+// диаграммы ```mermaid. Страница живёт в своём WebView; мост — только для текста ошибки (artifactError): ей не видны ни токен,
 // ни хаб, ни приложение. Сеть (CDN) доступна, переход по ссылке открывает браузер.
-import { useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import type { ShouldStartLoadRequest } from "react-native-webview/lib/WebViewTypes";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { artifactDocument, t } from "@kamharn/client";
+import { artifactDocument, artifactError, artifactFixPrompt, isRunnablePage, t } from "@kamharn/client";
 import { copyText } from "./copy.tsx";
 import { mermaidPage } from "./mermaidPage.ts";
 import { Btn } from "./ui.tsx";
@@ -31,7 +31,14 @@ function navigate(r: ShouldStartLoadRequest): boolean {
   return false;
 }
 
-function Page({ html, nonce, style }: { html: string; nonce: number; style: object }) {
+/** Отправить текст агенту этой сессии (кнопка «Отправить агенту» у ошибки страницы); нет — кнопки нет. */
+export const ArtifactSendCtx = createContext<((text: string) => void) | undefined>(undefined);
+
+/** Мост WebView — только для текста ошибки (перехватчик из artifactDocument); больше страница ничего передать не может. */
+function Page({ html, nonce, style, onError }: { html: string; nonce: number; style: object; onError?: (message: string) => void }) {
+  // страница может слать в мост сколько угодно мимо счётчика перехватчика — после 20 сообщений не слушаем
+  const count = useRef(0);
+  useEffect(() => void (count.current = 0), [nonce, html]);
   return (
     <WebView
       key={nonce}
@@ -39,6 +46,15 @@ function Page({ html, nonce, style }: { html: string; nonce: number; style: obje
       source={{ html }}
       originWhitelist={["*"]}
       onShouldStartLoadWithRequest={navigate}
+      {...(onError
+        ? {
+            onMessage: (e: WebViewMessageEvent): void => {
+              if (++count.current > 20) return;
+              const m = artifactError(e.nativeEvent.data);
+              if (m) onError(m);
+            },
+          }
+        : {})}
       javaScriptEnabled
       domStorageEnabled={false}
       allowFileAccess={false}
@@ -78,11 +94,34 @@ function Code({ source, full }: { source: string; full?: boolean }) {
   );
 }
 
+/** Первая ошибка страницы; сбрасывается при перезапуске. */
+function useFirstError(): [string | undefined, (m: string) => void, () => void] {
+  const [error, setError] = useState<string>();
+  const add = useCallback((m: string) => setError((cur) => cur ?? m), []);
+  const clear = useCallback(() => setError(undefined), []);
+  return [error, add, clear];
+}
+
+/** Плашка ошибки страницы: текст и «Отправить агенту» (если карточка в чате). */
+function ErrorBar({ error }: { error: string }) {
+  const send = useContext(ArtifactSendCtx);
+  const [sent, setSent] = useState(false);
+  return (
+    <View style={st.error}>
+      <Text style={st.errorText}>
+        ⚠ {t("Ошибка на странице", "Page error")}: {error}
+      </Text>
+      {send ? <Btn small title={sent ? t("Отправлено", "Sent") : t("Отправить агенту", "Send to the agent")} disabled={sent} onPress={() => (send(artifactFixPrompt(error)), setSent(true))} /> : null}
+    </View>
+  );
+}
+
 /** Страница на весь экран (и для .html-файлов из просмотра проекта). */
 export function ArtifactFull({ source, title, onClose }: { source: string; title?: string; onClose: () => void }) {
   const insets = useSafeAreaInsets();
   const [nonce, setNonce] = useState(0);
   const [code, setCode] = useState(false);
+  const [error, onError, clearError] = useFirstError();
   return (
     <Modal visible animationType="slide" onRequestClose={onClose}>
       <View style={[st.screen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
@@ -91,28 +130,45 @@ export function ArtifactFull({ source, title, onClose }: { source: string; title
           <Text style={[S.muted, st.title]} numberOfLines={1}>
             {title ?? t("Живой результат", "Live result")}
           </Text>
-          <Tools source={source} code={code} onCode={() => setCode(!code)} onRestart={() => setNonce(nonce + 1)} />
+          <Tools source={source} code={code} onCode={() => setCode(!code)} onRestart={() => (clearError(), setNonce(nonce + 1))} />
         </View>
-        {code ? <Code source={source} full /> : <Page html={artifactDocument(source)} nonce={nonce} style={{ flex: 1 }} />}
+        {error && !code ? <ErrorBar error={error} /> : null}
+        {code ? <Code source={source} full /> : <Page html={artifactDocument(source)} nonce={nonce} style={{ flex: 1 }} onError={onError} />}
       </View>
     </Modal>
   );
 }
 
-/** Карточка в ответе агента. */
-export function ArtifactCard({ source, title }: { source: string; title?: string }) {
+/** Карточка в ответе агента. autoRun — запускать даже кусок вёрстки (присланный .html-файл). */
+export function ArtifactCard({ source, title, autoRun }: { source: string; title?: string; autoRun?: boolean }) {
   const live = useSettled(source);
   const [nonce, setNonce] = useState(0);
   const [code, setCode] = useState(false);
   const [full, setFull] = useState(false);
+  const [forced, setForced] = useState(false);
+  const [error, onError, clearError] = useFirstError();
+  // кусок вёрстки (агент показывает правку шаблона) — это код, запуск по кнопке
+  if (!(autoRun || forced || isRunnablePage(source))) {
+    return (
+      <View style={st.card}>
+        <View style={st.bar}>
+          <Text style={[S.muted, st.title]}>HTML</Text>
+          <Btn small title={`▶ ${t("Запустить", "Run")}`} onPress={() => setForced(true)} />
+          <Btn small kind="ghost" title="⧉" onPress={() => void copyText(source)} />
+        </View>
+        <Code source={source} />
+      </View>
+    );
+  }
   return (
     <View style={st.card}>
       <View style={st.bar}>
         <Text style={[S.muted, st.title]} numberOfLines={1}>
           ✨ {title ?? t("Живой результат", "Live result")}
         </Text>
-        <Tools source={source} code={code} onCode={() => setCode(!code)} onRestart={() => setNonce(nonce + 1)} onFull={() => setFull(true)} />
+        <Tools source={source} code={code} onCode={() => setCode(!code)} onRestart={() => (clearError(), setNonce(nonce + 1))} onFull={() => setFull(true)} />
       </View>
+      {error && !code ? <ErrorBar error={error} /> : null}
       {code ? (
         <Code source={source} />
       ) : live ? (
@@ -123,7 +179,7 @@ export function ArtifactCard({ source, title }: { source: string; title?: string
           // в ленте страница только показывается: иначе WebView забирает свайп и чат не листается; играть — на весь экран
           <Pressable onPress={() => setFull(true)}>
             <View pointerEvents="none">
-              <Page html={artifactDocument(source)} nonce={nonce} style={st.frame} />
+              <Page html={artifactDocument(source)} nonce={nonce} style={st.frame} onError={onError} />
             </View>
             <Text style={st.open}>⤢ {t("Нажми, чтобы открыть", "Tap to open")}</Text>
           </Pressable>
@@ -154,7 +210,7 @@ export function FileArtifact({ url, name, size }: { url: string; name: string; s
       alive = false;
     };
   }, [want, url]);
-  if (source !== undefined) return <ArtifactCard source={source} title={name} />;
+  if (source !== undefined) return <ArtifactCard source={source} title={name} autoRun />;
   return (
     <View style={st.card}>
       <View style={st.bar}>
@@ -277,4 +333,6 @@ const st = StyleSheet.create({
   screen: { flex: 1, backgroundColor: C.bg },
   codeBox: { maxHeight: 360, backgroundColor: "#0b0d11" },
   codeText: { fontFamily: mono, fontSize: 12, color: C.text, lineHeight: 17 },
+  error: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 8, paddingVertical: 6, backgroundColor: "#2a1518", borderBottomWidth: 1, borderBottomColor: "#5b2630" },
+  errorText: { flex: 1, color: "#ffb4b4", fontFamily: mono, fontSize: 12 },
 });

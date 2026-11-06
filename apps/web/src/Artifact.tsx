@@ -1,17 +1,35 @@
 // Живой артефакт: блок ```html из ответа агента — работающая страница в карточке чата и на весь экран.
 // Песочница: iframe с sandbox="allow-scripts" без allow-same-origin — у страницы «нулевое» происхождение, ей не видны
 // ни токен, ни localStorage, ни API хаба, ни окно чата. Сеть (CDN) доступна.
-import { useEffect, useState } from "react";
+// Сама запускается только целая страница (isRunnablePage); кусок вёрстки — код с кнопкой «Запустить».
+// Ошибки страницы перехватывает скрипт из artifactDocument и шлёт сюда postMessage — только текст.
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { artifactDocument, t } from "@kamharn/client";
+import { artifactDocument, artifactError, artifactFixPrompt, isRunnablePage, t } from "@kamharn/client";
 
 /** пока агент дописывает ответ, блок растёт — запускаем, когда он не менялся столько */
 const SETTLE_MS = 1200;
 const SANDBOX = "allow-scripts allow-pointer-lock";
 
-function Frame({ source, nonce, className }: { source: string; nonce: number; className: string }) {
+/** Отправить текст агенту этой сессии (кнопка «Отправить агенту» у ошибки страницы); нет — кнопки нет. */
+export const ArtifactSendCtx = createContext<((text: string) => void) | undefined>(undefined);
+
+function Frame({ source, nonce, className, onError }: { source: string; nonce: number; className: string; onError?: (message: string) => void }) {
+  const ref = useRef<HTMLIFrameElement>(null);
+  useEffect(() => {
+    if (!onError) return;
+    // слушаем только свой iframe: в чате бывает несколько страниц
+    const onMessage = (e: MessageEvent) => {
+      if (e.source !== ref.current?.contentWindow) return;
+      const m = artifactError(e.data);
+      if (m) onError(m);
+    };
+    addEventListener("message", onMessage);
+    return () => removeEventListener("message", onMessage);
+  }, [onError]);
   return (
     <iframe
+      ref={ref}
       key={nonce}
       className={className}
       title={t("Живой результат", "Live result")}
@@ -47,10 +65,38 @@ function Tools({ source, onRestart, onCode, code, onFull }: { source: string; on
   );
 }
 
+/** Плашка ошибки страницы: текст и «Отправить агенту» (если карточка в чате). */
+function ErrorBar({ error }: { error: string }) {
+  const send = useContext(ArtifactSendCtx);
+  const [sent, setSent] = useState(false);
+  return (
+    <div className="artifact__error" data-artifact-error>
+      <span className="artifact__errtext">
+        ⚠ {t("Ошибка на странице", "Page error")}: {error}
+      </span>
+      {send && (
+        <button className="btn btn--small" disabled={sent} onClick={() => (send(artifactFixPrompt(error)), setSent(true))}>
+          {sent ? t("Отправлено", "Sent") : t("Отправить агенту", "Send to the agent")}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Первая ошибка страницы; сбрасывается при перезапуске. */
+function useFirstError(): [string | undefined, (m: string) => void, () => void] {
+  const [error, setError] = useState<string>();
+  // стабильные: Frame переподписывается на message при смене onError
+  const add = useCallback((m: string) => setError((cur) => cur ?? m), []);
+  const clear = useCallback(() => setError(undefined), []);
+  return [error, add, clear];
+}
+
 /** Страница на весь экран (и для .html-файлов из просмотра проекта). Esc — закрыть. */
 export function ArtifactFull({ source, title, onClose }: { source: string; title?: string; onClose: () => void }) {
   const [nonce, setNonce] = useState(0);
   const [code, setCode] = useState(false);
+  const [error, onError, clearError] = useFirstError();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     addEventListener("keydown", onKey);
@@ -64,36 +110,57 @@ export function ArtifactFull({ source, title, onClose }: { source: string; title
           ✕
         </button>
         <span className="muted artifact__title">{title ?? t("Живой результат", "Live result")}</span>
-        <Tools source={source} code={code} onCode={() => setCode(!code)} onRestart={() => setNonce(nonce + 1)} />
+        <Tools source={source} code={code} onCode={() => setCode(!code)} onRestart={() => (clearError(), setNonce(nonce + 1))} />
       </div>
-      {code ? <pre className="pre artifact__code artifact__code--full">{source}</pre> : <Frame source={source} nonce={nonce} className="artifact__frame--full" />}
+      {error && !code && <ErrorBar error={error} />}
+      {code ? <pre className="pre artifact__code artifact__code--full">{source}</pre> : <Frame source={source} nonce={nonce} className="artifact__frame--full" onError={onError} />}
     </div>,
     document.body,
   );
 }
 
-/** Карточка в ответе агента. */
-export function ArtifactCard({ source, title }: { source: string; title?: string }) {
+/** Карточка в ответе агента. autoRun — запускать даже кусок вёрстки (присланный .html-файл). */
+export function ArtifactCard({ source, title, autoRun }: { source: string; title?: string; autoRun?: boolean }) {
   const [ready, setReady] = useState<string>();
   const [nonce, setNonce] = useState(0);
   const [code, setCode] = useState(false);
   const [full, setFull] = useState(false);
+  const [forced, setForced] = useState(false);
+  const [error, onError, clearError] = useFirstError();
   useEffect(() => {
     const timer = setTimeout(() => setReady(source), SETTLE_MS);
     return () => clearTimeout(timer);
   }, [source]);
   // запускаем только устоявшийся исходник: недописанная страница не мигает ошибками и не дёргает CDN на каждую дельту
   const live = ready === source;
+  const run = autoRun || forced || isRunnablePage(source);
+  if (!run) {
+    return (
+      <div className="artifact" data-artifact data-artifact-code>
+        <div className="artifact__bar">
+          <span className="muted artifact__title">HTML</span>
+          <button className="btn btn--small" title={t("Запустить как страницу", "Run as a page")} onClick={() => setForced(true)} data-artifact-run>
+            ▶ {t("Запустить", "Run")}
+          </button>
+          <button className="btn btn--small" title={t("Скопировать код", "Copy the code")} onClick={() => void navigator.clipboard?.writeText(source)}>
+            ⧉
+          </button>
+        </div>
+        <pre className="pre artifact__code">{source}</pre>
+      </div>
+    );
+  }
   return (
     <div className="artifact" data-artifact>
       <div className="artifact__bar">
         <span className="muted artifact__title">✨ {title ?? t("Живой результат", "Live result")}</span>
-        <Tools source={source} code={code} onCode={() => setCode(!code)} onRestart={() => setNonce(nonce + 1)} onFull={() => setFull(true)} />
+        <Tools source={source} code={code} onCode={() => setCode(!code)} onRestart={() => (clearError(), setNonce(nonce + 1))} onFull={() => setFull(true)} />
       </div>
+      {error && !code && <ErrorBar error={error} />}
       {code ? (
         <pre className="pre artifact__code">{source}</pre>
       ) : live ? (
-        <Frame source={source} nonce={nonce} className="artifact__frame" />
+        <Frame source={source} nonce={nonce} className="artifact__frame" onError={onError} />
       ) : (
         <div className="artifact__wait muted">{t("Собираю…", "Assembling…")}</div>
       )}
@@ -120,7 +187,7 @@ export function FileArtifact({ url, name, size }: { url: string; name: string; s
       alive = false;
     };
   }, [want, url]);
-  if (source !== undefined) return <ArtifactCard source={source} title={name} />;
+  if (source !== undefined) return <ArtifactCard source={source} title={name} autoRun />;
   return (
     <div className="artifact" data-artifact>
       <div className="artifact__bar">

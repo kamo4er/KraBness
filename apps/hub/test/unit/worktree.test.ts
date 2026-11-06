@@ -28,12 +28,18 @@ test("slugify: кириллица и мусор → имя ветки", () => {
   assert.equal(slugify("Детская игра: кнопки!"), "detskaya-igra-knopki");
   assert.equal(slugify("   "), "");
   assert.ok(slugify("очень длинное название сессии про всё на свете сразу").length <= 30);
+  assert.equal(slugify("Почини сложение в sum.js и добавь тест"), "pochini-slozhenie-sum-js", "до 4 слов, без однобуквенных");
+  assert.equal(slugify("Задачи: отметка о выполнении"), "zadachi-otmetka");
+  assert.equal(slugify("Суперкалифраджилистикэкспиалидоций"), "superkalifradzhilistikek", "одно длинное слово режется");
+  assert.equal(slugify("v2 и 3d"), "v2-3d");
+  assert.equal(slugify("Add a due date to todos and an overdue() function"), "add-due-date-todos", "без служебных слов");
+  assert.equal(slugify("Кнопка для экспорта в CSV"), "knopka-eksporta-csv");
 });
 
 test("worktree: копия рядом с проектом, вливание одним коммитом, сессия работает дальше", async () => {
   const { root, dir } = repo();
   const { worktree: wt, directory } = await createWorktree(join(dir, "app"), "Детская игра", "ks_abcdef123456");
-  assert.equal(wt.branch, "kamharn/detskaya-igra-123456");
+  assert.equal(wt.branch, "krab/detskaya-igra-123456");
   assert.equal(wt.base, "main");
   assert.equal(wt.path, join(root, "DemoGame.worktrees", "detskaya-igra-123456"));
   assert.equal(directory, join(wt.path, "app"), "подпапка сессии сохраняется");
@@ -52,7 +58,7 @@ test("worktree: копия рядом с проектом, вливание од
   assert.equal(readFileSync(join(dir, "app", "game.txt"), "utf8"), "v2\n");
   assert.ok(existsSync(join(dir, "app", "sound.txt")));
   const msg = git(dir, "log", "-1", "--format=%B");
-  assert.match(msg, /^Детская игра\n\nСессия KraBness, ветка kamharn\/detskaya-igra-123456:\n- кнопки по ширине\n- Работа сессии «Детская игра»/);
+  assert.match(msg, /^Детская игра\n\nСессия KraBness, ветка krab\/detskaya-igra-123456:\n- кнопки по ширине\n- Работа сессии «Детская игра»/);
   assert.equal(git(dir, "rev-list", "--count", "HEAD"), "2", "один коммит в основной");
   st = await worktreeStatus(wt);
   assert.deepEqual([st.ahead, st.dirty], [0, 0], "копия совпадает с основной");

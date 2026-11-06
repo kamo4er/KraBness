@@ -29,7 +29,8 @@ export interface SessionActionsOpts {
   bot?: boolean;
 }
 
-export const branchName = (branch: string): string => branch.replace(/^kamharn\//, "");
+/** Имя ветки без служебного префикса (krab/, у старых сессий kamharn/). */
+export const branchName = (branch: string): string => branch.replace(/^(krab|kamharn)\//, "");
 
 export function sessionActions(s: SessionInfo, o: SessionActionsOpts): SessionAction[] {
   const mobile = o.platform === "mobile";

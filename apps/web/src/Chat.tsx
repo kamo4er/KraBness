@@ -6,6 +6,7 @@ import { EffortSelect } from "./Effort.tsx";
 import { SessionUsage } from "./Usage.tsx";
 import { SessionBotPanel } from "./SessionBot.tsx";
 import { onSessionAction, openPalette, type HeaderAction } from "./Palette.tsx";
+import { ArtifactSendCtx } from "./Artifact.tsx";
 import { pickOpencodeModel } from "./ModelPick.tsx";
 import { MODES } from "./NewSession.tsx";
 import { FileChip, FileRefCtx, Limits, PartView, PermissionCard, QuestionCard } from "./Parts.tsx";
@@ -18,6 +19,8 @@ export function Chat({ id }: { id: string }) {
   // клик по пути к файлу в ответе — просмотр проекта на этом файле (стабильная ссылка: иначе перерисуется весь markdown)
   const dir = info?.directory;
   const openRef = useCallback((r: FileRef) => dir && go({ page: "project", id, file: resolveFileRef(r, dir), ...(r.line ? { line: r.line } : {}) }), [id, dir]);
+  // «Отправить агенту» у ошибки живой страницы — сообщением в эту сессию
+  const sendToAgent = useCallback((text: string) => void client.prompt(id, text).catch((e: Error) => alert(e.message)), [id]);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showDown, setShowDown] = useState(false);
@@ -50,6 +53,7 @@ export function Chat({ id }: { id: string }) {
   const busy = info.status === "busy" || info.status === "retry";
   return (
     <FileRefCtx.Provider value={openRef}>
+    <ArtifactSendCtx.Provider value={sendToAgent}>
     <div
       className={`chat ${dragging ? "chat--drop" : ""}`}
       // файлы можно бросить в любое место чата
@@ -122,6 +126,7 @@ export function Chat({ id }: { id: string }) {
       {view?.questions.map((q) => <QuestionCard key={q.id} sessionId={id} req={q} />)}
       <Composer sessionId={id} busy={busy} slash={info.engine === "claude"} dropFiles={dropFiles} />
     </div>
+    </ArtifactSendCtx.Provider>
     </FileRefCtx.Provider>
   );
 }
@@ -199,15 +204,21 @@ function ChatHeader({ info, engines, limits }: { info: NonNullable<ReturnType<ty
   const actions = sessionActions(info, { platform: "web", bot });
   const pills = actions.filter((a) => a.pill);
 
-  // подключён ли бот в Telegram — для плашки; не ответил — просто без неё
+  // подключён ли бот в Telegram — для плашки; не ответил — просто без неё.
+  // Заново — при возврате во вкладку: бота могли подключить с телефона
   useEffect(() => {
     let alive = true;
-    client.sessionBot(info.id).then(
-      (b) => alive && setBot(b.configured),
-      () => {},
-    );
+    const load = () =>
+      client.sessionBot(info.id).then(
+        (b) => alive && setBot(b.configured),
+        () => {},
+      );
+    void load();
+    const onVisible = () => document.visibilityState === "visible" && void load();
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       alive = false;
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [info.id]);
 

@@ -2,7 +2,7 @@
 import { createContext, isValidElement, memo, useContext, useMemo, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { artifactSource, isArtifactFile, limitView, parseFileRef, type FileRef, type ClaudeLimits, type Part, type PermissionRequest, type QuestionAnswers, type QuestionRequest, t } from "@kamharn/client";
+import { artifactSource, isArtifactFile, limitView, lineDiff, tn, parseFileRef, type FileRef, type ClaudeLimits, type Part, type PermissionRequest, type QuestionAnswers, type QuestionRequest, t } from "@kamharn/client";
 import { client, fmtSize } from "./hub.ts";
 import { MermaidDiagram } from "./Mermaid.tsx";
 import { ArtifactCard, FileArtifact } from "./Artifact.tsx";
@@ -172,16 +172,23 @@ function ToolCard({ part }: { part: Extract<Part, { type: "tool" }> }) {
 export function ToolInput({ tool, input }: { tool: string; input: Record<string, unknown> }) {
   const oldS = (input.old_string ?? input.oldString) as string | undefined;
   const newS = (input.new_string ?? input.newString) as string | undefined;
+  // дифф считается раз на правку, а не на каждую перерисовку ленты
+  const rows = useMemo(() => (typeof oldS === "string" && typeof newS === "string" ? lineDiff(oldS, newS) : []), [oldS, newS]);
   if (typeof oldS === "string" && typeof newS === "string") {
     return (
       <div className="diff">
         <div className="diff__file">{String(input.file_path ?? input.filePath ?? "")}</div>
-        {oldS.split("\n").map((l, i) => (
-          <div key={`o${i}`} className="diff__del">- {l}</div>
-        ))}
-        {newS.split("\n").map((l, i) => (
-          <div key={`n${i}`} className="diff__add">+ {l}</div>
-        ))}
+        {rows.map((r, i) =>
+          r.kind === "gap" ? (
+            <div key={i} className="diff__gap">
+              ⋯ {tn(r.count, ["строка без изменений", "строки без изменений", "строк без изменений"], ["unchanged line", "unchanged lines"])}
+            </div>
+          ) : (
+            <div key={i} className={`diff__${r.kind}`}>
+              {r.kind === "del" ? "-" : r.kind === "add" ? "+" : " "} {r.text}
+            </div>
+          ),
+        )}
       </div>
     );
   }

@@ -1,7 +1,7 @@
 // Задачи на телефоне: список, новая задача, отчёт и решение. Конвейер ведёт хаб, экран только показывает.
 import { useEffect, useState } from "react";
 import { ScrollView, Switch, Text, TextInput, View } from "react-native";
-import { t, type TaskInfo, type TaskStep, tn, defaultTaskModels, engineName, modelOptions, optionReady, parseModelKey, type NewSessionPrefs, type EngineInfo } from "@kamharn/client";
+import { t, type TaskInfo, type TaskStep, tn, branchName, defaultTaskModels, fileKind, goalBeyondTitle, engineName, modelOptions, optionReady, parseModelKey, type NewSessionPrefs, type EngineInfo } from "@kamharn/client";
 import { client, useEngines, useHub } from "../store.ts";
 import { back, go, replace } from "../nav.ts";
 import { Markdown } from "../Parts.tsx";
@@ -38,6 +38,7 @@ function nextNight(now = new Date()): number {
   return d.getTime();
 }
 const iconColor = (s: TaskInfo["status"]): string => (s === "ready" ? "#e3b341" : s === "merged" ? C.ok : s === "failed" ? C.err : s === "running" ? C.accent : C.muted);
+const FILE_COLOR = { new: C.ok, del: C.err, mod: C.warn } as const;
 
 export function Tasks() {
   const { tasks } = useHub();
@@ -223,7 +224,7 @@ function NewTask({ onDone }: { onDone: () => void }) {
 }
 
 export function Task({ id }: { id: string }) {
-  const { tasks, sessions } = useHub();
+  const { tasks } = useHub();
   const task = tasks.find((x) => x.id === id);
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
@@ -241,7 +242,6 @@ export function Task({ id }: { id: string }) {
       .finally(() => setBusy(false));
   };
   const r = task.report;
-  const title = (sid?: string) => sessions.find((s) => s.id === sid)?.title ?? t("открыть", "open");
   return (
     <View style={S.screen}>
       <View style={S.head}>
@@ -252,8 +252,12 @@ export function Task({ id }: { id: string }) {
       </View>
       <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }} keyboardShouldPersistTaps="handled">
         <Text style={S.text}>{STATUS()[task.status]}</Text>
-        <Text style={[S.muted, { fontFamily: mono }]}>{task.directory}</Text>
-        <Text style={S.text}>{task.goal}</Text>
+        <Text style={[S.muted, { fontFamily: mono }]}>
+          {task.directory}
+          {task.worktree ? `  ⎇ ${branchName(task.worktree.branch)}` : ""}
+        </Text>
+        {/* цель целиком — только если заголовок её обрезал: иначе тот же текст дважды */}
+        {goalBeyondTitle(task) ? <Text style={S.text}>{task.goal}</Text> : null}
         {task.error ? <Text style={S.error}>{task.error}</Text> : null}
         {task.asking ? (
           <View style={{ borderWidth: 1, borderColor: C.warn ?? "#e3b341", borderRadius: 10, padding: 10, gap: 6 }}>
@@ -280,13 +284,14 @@ export function Task({ id }: { id: string }) {
 
         <Text style={S.h3}>{t("Шаги", "Steps")}</Text>
         {task.steps.map((s, i) => (
-          <View key={i} style={{ gap: 4 }}>
-            <Text style={S.text}>
+          <View key={i} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Text style={[S.text, { flex: 1 }]}>
               {s.status === "running" ? "…" : s.status === "failed" ? "✗" : "✓"} {STEP()[s.kind]}
               {s.model ? <Text style={S.muted}> · {s.model.modelId}</Text> : null}
               {s.note ? <Text style={S.muted}> · {s.note}</Text> : null}
             </Text>
-            {s.sessionId ? <Btn small title={`${t("чат", "chat")}: ${title(s.sessionId)}`} onPress={() => go({ page: "session", id: s.sessionId! })} /> : null}
+            {/* название сессии шага — тот же текст задачи, поэтому кнопка без него */}
+            {s.sessionId ? <Btn small title={t("открыть чат", "open chat")} onPress={() => go({ page: "session", id: s.sessionId! })} /> : null}
           </View>
         ))}
 
@@ -299,7 +304,11 @@ export function Task({ id }: { id: string }) {
               {r.commit ? ` · ${t("коммит", "commit")} ${r.commit}` : ""}
             </Text>
             {r.summary ? <Markdown text={r.summary} /> : null}
-            {r.files.length ? <Text style={[S.muted, { fontFamily: mono }]}>{r.files.map((f) => `${f.status}  ${f.path}`).join("\n")}</Text> : null}
+            {r.files.map((f) => (
+              <Text key={f.path} style={[S.muted, { fontFamily: mono }]}>
+                <Text style={{ color: FILE_COLOR[fileKind(f.status)] }}>{f.status.padEnd(2)}</Text> {f.path}
+              </Text>
+            ))}
             {r.review === "remarks" && r.reviewText ? (
               <>
                 <Text style={S.h3}>{t("Замечания ревью", "Review remarks")}</Text>

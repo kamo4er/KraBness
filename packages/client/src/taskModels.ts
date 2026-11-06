@@ -72,3 +72,10 @@ export function computerHint(c: DispatcherBrains["computer"]): string {
   if (c.warm === "failed") return t("Не удалось подготовить управление ПК. Проверь сеть и попробуй выключить и включить снова.", "Couldn't prepare PC control. Check the network and try turning it off and on again.");
   return "";
 }
+
+const flat = (s: string) => s.trim().replace(/\s+/g, " ").replace(/\.$/, "");
+/** Цель задачи не уместилась в заголовок (он — её первое предложение или обрезка): показать её отдельно. */
+export const goalBeyondTitle = (task: { goal: string; title: string }): boolean => flat(task.goal) !== flat(task.title);
+
+/** Значок файла в отчёте по статусу git: A и ?? — новый, D — удалён, остальное — изменён. */
+export const fileKind = (status: string): "new" | "del" | "mod" => (/^(A|\?\?)/.test(status) ? "new" : status.includes("D") ? "del" : "mod");

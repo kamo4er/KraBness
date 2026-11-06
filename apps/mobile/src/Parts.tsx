@@ -1,7 +1,7 @@
 // Части сообщения: текст (упрощённый markdown), размышления, инструменты, файлы, запрос подтверждения.
-import { createContext, memo, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ActivityIndicator, Image, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View } from "react-native";
-import { isArtifactFile, isArtifactLang, parseFileRef, t, type FileRef, type Part, type PermissionReply, type PermissionRequest, type QuestionAnswers, type QuestionRequest } from "@kamharn/client";
+import { isArtifactFile, isArtifactLang, lineDiff, parseFileRef, t, tn, type FileRef, type Part, type PermissionReply, type PermissionRequest, type QuestionAnswers, type QuestionRequest } from "@kamharn/client";
 import { client, fmtSize } from "./store.ts";
 import { go } from "./nav.ts";
 import { imageUri, openFile, saveFile, shareFile } from "./files.ts";
@@ -221,6 +221,8 @@ function Pre({ text, color }: { text: string; color?: string }) {
 export function ToolInput({ tool, input }: { tool: string; input: Record<string, unknown> }) {
   const oldS = (input.old_string ?? input.oldString) as string | undefined;
   const newS = (input.new_string ?? input.newString) as string | undefined;
+  // дифф считается раз на правку, а не на каждую перерисовку ленты
+  const rows = useMemo(() => (typeof oldS === "string" && typeof newS === "string" ? lineDiff(oldS, newS) : []), [oldS, newS]);
   const file = String(input.file_path ?? input.filePath ?? "");
   if (typeof oldS === "string" && typeof newS === "string") {
     return (
@@ -228,12 +230,17 @@ export function ToolInput({ tool, input }: { tool: string; input: Record<string,
         <Text style={pt.diffFile}>{file}</Text>
         <ScrollView horizontal contentContainerStyle={{ padding: 6 }}>
           <View>
-            {oldS.split("\n").map((l, i) => (
-              <Text key={`o${i}`} style={[md.preText, pt.del]}>- {l}</Text>
-            ))}
-            {newS.split("\n").map((l, i) => (
-              <Text key={`n${i}`} style={[md.preText, pt.add]}>+ {l}</Text>
-            ))}
+            {rows.map((r, i) =>
+              r.kind === "gap" ? (
+                <Text key={i} style={[md.preText, pt.gap]}>
+                  ⋯ {tn(r.count, ["строка без изменений", "строки без изменений", "строк без изменений"], ["unchanged line", "unchanged lines"])}
+                </Text>
+              ) : (
+                <Text key={i} style={[md.preText, pt[r.kind]]}>
+                  {r.kind === "del" ? "-" : r.kind === "add" ? "+" : " "} {r.text}
+                </Text>
+              ),
+            )}
           </View>
         </ScrollView>
       </View>
@@ -362,6 +369,8 @@ const pt = StyleSheet.create({
   diffFile: { color: C.muted, fontFamily: mono, fontSize: 11, paddingHorizontal: 8, paddingTop: 6 },
   del: { color: "#f19999", backgroundColor: "rgba(239,68,68,.12)" },
   add: { color: "#9fe0a8", backgroundColor: "rgba(34,197,94,.12)" },
+  ctx: { color: C.muted },
+  gap: { color: C.muted, fontStyle: "italic" },
   thumb: { width: 220, height: 160, borderRadius: 10, backgroundColor: C.bg3 },
   file: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: C.bg3, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, alignSelf: "flex-start", maxWidth: "100%" },
   perm: { margin: 8, padding: 12, gap: 8, borderRadius: 12, backgroundColor: "#2a2312", borderWidth: 1, borderColor: "#5c4a1a" },

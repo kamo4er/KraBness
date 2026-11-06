@@ -1,6 +1,6 @@
 // Чат сессии: стрим сообщений, инструменты, подтверждения, смена модели и режима, отправка и остановка.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View, type TextInputInstance } from "react-native";
+import { ActivityIndicator, AppState, FlatList, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View, type TextInputInstance } from "react-native";
 import { limitView, resolveFileRef, sessionActions, sessionSummary, type FileRef, type ClaudeLimits, type ListeningPort, type MessageView, type PermissionMode, type SessionActionId, type SessionInfo, type SlashCommand, type FileHit, t, locale } from "@kamharn/client";
 import { client, fmtSize, useEngines, useHub, useQuickPrompts } from "../store.ts";
 import { loadChat } from "../cache.ts";
@@ -19,6 +19,7 @@ import { pickOpencodeModel } from "../modelPick.tsx";
 import { SessionUsage } from "../Usage.tsx";
 import { MentionList, useMention } from "../mention.tsx";
 import { CopyActions, copyableText } from "../copy.tsx";
+import { ArtifactSendCtx } from "../Artifact.tsx";
 
 /** Автопроверка с телефона: включить с командами проекта (сохранёнными или предложенными), прогнать сейчас. Править команды удобнее в вебе. */
 async function checksMenu(id: string, on: boolean): Promise<void> {
@@ -47,6 +48,8 @@ export function Chat({ id }: { id: string }) {
   // тап по пути к файлу в ответе — просмотр проекта на этом файле (стабильная ссылка: иначе перерисуется весь markdown)
   const dir = info?.directory;
   const openRef = useCallback((r: FileRef) => dir && go({ page: "project", id, file: resolveFileRef(r, dir), ...(r.line ? { line: r.line } : {}) }), [id, dir]);
+  // «Отправить агенту» у ошибки живой страницы — сообщением в эту сессию
+  const sendToAgent = useCallback((text: string) => void client?.prompt(id, text).catch((e: Error) => dialog(t("Не получилось", "Failed"), e.message)), [id]);
   const list = useRef<FlatList<MessageView>>(null);
   const [showDown, setShowDown] = useState(false);
   const [search, setSearch] = useState<string | null>(null);
@@ -115,6 +118,7 @@ export function Chat({ id }: { id: string }) {
   return (
     // подъём над клавиатурой — общий, в App.tsx
     <FileRefCtx.Provider value={openRef}>
+    <ArtifactSendCtx.Provider value={sendToAgent}>
     <View style={S.screen}>
       {search !== null ? (
         <View style={[S.head, st.searchBar]}>
@@ -189,6 +193,7 @@ export function Chat({ id }: { id: string }) {
       {view?.questions.map((q) => <QuestionCard key={q.id} sessionId={id} req={q} />)}
       <Composer key={id} sessionId={id} busy={busy} slash={info.engine === "claude"} talk={talk} />
     </View>
+    </ArtifactSendCtx.Provider>
     </FileRefCtx.Provider>
   );
 }
@@ -218,15 +223,20 @@ function Header({ info, conn, onSearch, talk }: { info: SessionInfo; conn: Retur
   const [preview, setPreview] = useState(false);
   const [sheet, setSheet] = useState<ParamSheet>();
   const [bot, setBot] = useState<boolean>();
-  // подключён ли бот в Telegram — для плашки; не ответил — просто без неё
+  // подключён ли бот в Telegram — для плашки; не ответил — просто без неё.
+  // Экран чата пересоздаётся при возврате с экрана бота; заново — ещё и когда приложение снова на экране (бота могли подключить с ПК)
   useEffect(() => {
     let alive = true;
-    client?.sessionBot(info.id).then(
-      (b) => alive && setBot(b.configured),
-      () => {},
-    );
+    const load = () =>
+      client?.sessionBot(info.id).then(
+        (b) => alive && setBot(b.configured),
+        () => {},
+      );
+    void load();
+    const sub = AppState.addEventListener("change", (s) => s === "active" && void load());
     return () => {
       alive = false;
+      sub.remove();
     };
   }, [info.id]);
   const fail = (e: Error) => dialog(t("Не получилось", "Failed"), e.message);
@@ -256,6 +266,15 @@ function Header({ info, conn, onSearch, talk }: { info: SessionInfo; conn: Retur
         { text: t("Удалить", "Delete"), style: "destructive", onPress: () => void client?.deleteSession(info.id).then(back, fail) },
       ]);
   };
+
+  // плашки открывают своё; у «Разговора» открывать нечего — спрашиваем, а не выключаем молча
+  const pill = (id: SessionActionId) =>
+    id === "talk"
+      ? dialog(t("Разговор включён", "Talk mode is on"), t("Выключил микрофон — сообщение ушло само, ответ звучит вслух.", "Mic off — the message is sent by itself, the answer is read aloud."), [
+          { text: t("Оставить", "Keep"), style: "cancel" },
+          { text: t("Выключить", "Turn off"), onPress: () => setTalk(info.id, false) },
+        ])
+      : act(id);
 
   const menu = () =>
     dialog(
@@ -335,7 +354,7 @@ function Header({ info, conn, onSearch, talk }: { info: SessionInfo; conn: Retur
       {pills.length ? (
         <View style={st.pills}>
           {pills.map((a) => (
-            <Pressable key={a.id} style={({ pressed }) => [st.pill, pressed && { opacity: 0.7 }]} hitSlop={4} onPress={() => act(a.id)}>
+            <Pressable key={a.id} style={({ pressed }) => [st.pill, pressed && { opacity: 0.7 }]} hitSlop={4} onPress={() => pill(a.id)}>
               <Text style={st.pillText} numberOfLines={1}>
                 {a.pill}
               </Text>

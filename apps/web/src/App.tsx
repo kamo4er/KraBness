@@ -219,7 +219,12 @@ function SessionItem({ s, active }: { s: SessionInfo; active: boolean }) {
       </div>
       <div className="session__row muted">
         <span className={`badge badge--${s.engine}`}>{s.engine}</span>
-        {s.status === "busy" && <span className="spinner" title={t("работает", "running")} />}
+        {/* как в приложении: словом и цветом, серый кружок один был почти не виден */}
+        {(s.status === "busy" || s.status === "retry") && (
+          <span className="session__busy">
+            <span className="spinner" /> {s.status === "retry" ? t("повтор", "retrying") : t("работает", "working")}
+          </span>
+        )}
         {s.resumeAt ? <span title={t("продолжит сам после лимита", "will resume by itself after the limit")} style={{ whiteSpace: "nowrap", flexShrink: 0 }}>⏳ {new Date(s.resumeAt).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" })}</span> : null}
         <span className="session__dir">{shortPath(s.directory)}</span>
         <SessionUsage id={s.id} />

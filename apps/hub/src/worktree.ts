@@ -1,5 +1,5 @@
 // Ветка на сессию (git worktree): агент работает в своей копии проекта и не мешает другим сессиям в том же репозитории.
-// Копия лежит рядом с проектом (Projects\DemoGame.worktrees\<имя>), ветка kamharn/<имя>.
+// Копия лежит рядом с проектом (Projects\DemoGame.worktrees\<имя>), ветка krab/<имя> (у старых сессий — kamharn/<имя>).
 // «Влить» — squash одним коммитом в основную ветку; после этого копия сбрасывается на основную ветку,
 // и сессия может работать дальше (Claude привязывает историю к папке — удалять копию нельзя).
 import { execFile } from "node:child_process";
@@ -21,16 +21,30 @@ export function git(cwd: string, args: string[]): Promise<string> {
 
 const RU: Record<string, string> = { а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "h", ц: "c", ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya" };
 
-/** «Детская игра: кнопки» → «detskaya-igra-knopki» (для имени ветки и папки) */
+/** служебные слова (после транслитерации) — в имени ветки только место занимают */
+const STOP = new Set(["to", "the", "and", "of", "for", "in", "on", "an", "at", "with", "na", "po", "dlya", "ot", "do", "za", "iz", "pri", "ili", "kak", "chto"]);
+
+/**
+ * «Детская игра: кнопки» → «detskaya-igra-knopki» (для имени ветки и папки). Коротко и читаемо: до 4 слов и 24 знаков,
+ * без однобуквенных («в», «и») и без обрезки посреди слова; одно длинное слово всё же режется.
+ */
 export function slugify(s: string): string {
-  return [...s.toLowerCase()]
+  const words = [...s.toLowerCase()]
     .map((c) => RU[c] ?? c)
     .join("")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 30)
-    .replace(/-+$/, "");
+    .split(/[^a-z0-9]+/)
+    .filter((w) => (w.length > 1 || /\d/.test(w)) && !STOP.has(w));
+  let out = "";
+  for (const w of words.slice(0, 4)) {
+    const next = out ? `${out}-${w}` : w;
+    if (next.length > 24) break;
+    out = next;
+  }
+  return out || (words[0] ?? "").slice(0, 24);
 }
+
+/** Префикс веток сессий. Старые ветки `kamharn/…` живут как жили: имя ветки хранится в сессии целиком. */
+export const BRANCH_PREFIX = "krab/";
 
 /** Новая копия проекта для сессии. directory — папка сессии (может быть подпапкой репозитория). */
 export async function createWorktree(directory: string, title: string, sessionId: string): Promise<{ worktree: WorktreeInfo; directory: string }> {
@@ -43,7 +57,7 @@ export async function createWorktree(directory: string, title: string, sessionId
   const base = (await git(top, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "")).trim();
   if (!base || base === "HEAD") throw new GitError(L("В репозитории нет коммитов или HEAD отсоединён — нужна обычная ветка", "The repository has no commits or HEAD is detached — a regular branch is needed"));
   const name = `${slugify(title) || "session"}-${sessionId.slice(-6)}`;
-  const branch = `kamharn/${name}`;
+  const branch = `${BRANCH_PREFIX}${name}`;
   const path = join(dirname(top), `${basename(top)}.worktrees`, name);
   await git(top, ["worktree", "add", "-b", branch, path, base]);
   // без зависимостей в копии не идут ни тесты, ни tsc; не вышло — агент разберётся сам

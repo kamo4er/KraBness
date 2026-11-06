@@ -165,7 +165,7 @@ test("папка занята: своя сессия в той же папке �
   assert.match(await t.dispatcher.send(same.id, "и ты"), /в очереди/, "в одной папке вместе не работают");
 
   const out = await t.dispatcher.createSession({ directory: repo, engine: "opencode", title: "Третья" });
-  assert.match(out, /копия в ветке kamharn\//);
+  assert.match(out, /копия в ветке krab\//);
   const third = t.sessions.list().find((s) => s.title === "Третья")!;
   assert.notEqual(third.directory.toLowerCase(), repo.toLowerCase());
   assert.match(await t.dispatcher.send(third.id, "работай"), /Отправлено/, "у копии своя папка: идёт сразу");

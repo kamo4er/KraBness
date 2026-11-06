@@ -35,7 +35,7 @@ test("плашки и переключатели: видно только вкл
   // про бота ещё не спросили — ни «вкл», ни «выкл»
   assert.equal("on" in off.find((a) => a.id === "bot")!, false);
 
-  const wt = { branch: "kamharn/fix-a", base: "main", path: "x" } as SessionInfo["worktree"];
+  const wt = { branch: "krab/fix-a", base: "main", path: "x" } as SessionInfo["worktree"];
   const on = sessionActions(session({ autoCheck: true, worktree: wt }), { platform: "mobile", talk: true, bot: true });
   assert.deepEqual(on.filter((a) => a.pill).map((a) => a.id), ["worktree", "checks", "talk", "bot"]);
   assert.match(on.find((a) => a.id === "worktree")!.pill!, /fix-a$/);
