@@ -1,7 +1,7 @@
 // Список сессий по группам: статус, движок, папка; создание новой и настройки.
 // Долгое нажатие на сессию — перенести в группу.
 import { useEffect, useMemo, useState } from "react";
-import { BackHandler, Image, Pressable, SectionList, StyleSheet, Text, View } from "react-native";
+import { BackHandler, Image, Pressable, SectionList, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { t, type SessionGroup, type SessionInfo, locale } from "@kamharn/client";
 import { client, recall, remember, useHub } from "../store.ts";
 import { SessionUsage } from "../Usage.tsx";
@@ -39,6 +39,9 @@ export function Sessions() {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => (setSearching(false), true));
     return () => sub.remove();
   }, [searching]);
+  // шапка целиком: ~195 dp отступов, значков и рамок + ~180 dp текста, который растёт со шрифтом системы
+  const { width, fontScale } = useWindowDimensions();
+  const narrow = width < 205 + 180 * fontScale;
   const [longOffline, setLongOffline] = useState(false);
   const offline = state.conn === "offline" || state.conn === "connecting";
   useEffect(() => {
@@ -50,13 +53,20 @@ export function Sessions() {
     <View style={S.screen}>
       <View style={S.head}>
         <Image source={require("../../assets/logo.png")} style={{ width: 28, height: 28, marginRight: -4 }} />
-        <Text style={S.h1}>KraBness</Text>
+        <Text style={[S.h1, { flexShrink: 1 }]} numberOfLines={1}>
+          KraBness
+        </Text>
         <ConnDot conn={state.conn} />
-        <Text style={[S.muted, { flex: 1 }]}>{state.conn === "online" ? "" : connLabel(state.conn)}</Text>
-        <Btn small title="🔍" onPress={() => setSearching(!searching)} />
-        <TasksBtn />
-        <Btn small kind="primary" title={t("+ Новая", "+ New")} onPress={() => go({ page: "new" })} />
-        <Btn small title="⚙" onPress={() => go({ page: "settings" })} />
+        <Text style={[S.muted, { flex: 1 }]} numberOfLines={1}>
+          {state.conn === "online" ? "" : connLabel(state.conn)}
+        </Text>
+        {/* кнопки не сжимаются: тесно (узкий экран, крупный шрифт) — сначала «+ Новая» → «+», потом название с многоточием */}
+        <View style={st.headBtns}>
+          <Btn small title="🔍" onPress={() => setSearching(!searching)} />
+          <TasksBtn />
+          <Btn small kind="primary" title={narrow ? "+" : t("+ Новая", "+ New")} onPress={() => go({ page: "new" })} />
+          <Btn small title="⚙" onPress={() => go({ page: "settings" })} />
+        </View>
       </View>
       <Limits limits={state.limits} style={{ paddingHorizontal: 16, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line }} />
       {update.release ? (
@@ -231,7 +241,8 @@ function Row({ s, onLongPress }: { s: SessionInfo; onLongPress: () => void }) {
 }
 
 const st = StyleSheet.create({
-  wake: { padding: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line },
+  headBtns: { flexDirection: "row", gap: 6, flexShrink: 0 },
+  wake:{ padding: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line },
   row: { paddingHorizontal: 16, paddingVertical: 12, gap: 6 },
   dispatcher: { borderBottomWidth: 1, borderBottomColor: C.line },
   line: { flexDirection: "row", alignItems: "center", gap: 8 },

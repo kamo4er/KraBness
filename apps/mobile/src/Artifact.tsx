@@ -246,6 +246,7 @@ const MERMAID_TIMEOUT_MS = 30_000;
 /** Диаграмма ```mermaid; не нарисовалась — показываем исходник и причину. */
 export function MermaidCard({ source }: { source: string }) {
   const live = useSettled(source);
+  const onScreen = useContext(ArtifactVisibleCtx);
   const [height, setHeight] = useState(0);
   const [error, setError] = useState<{ message: string; load: boolean }>();
   const [nonce, setNonce] = useState(0);
@@ -256,10 +257,11 @@ export function MermaidCard({ source }: { source: string }) {
     setError(undefined);
   }, [source, nonce]);
   useEffect(() => {
-    if (!live || height || error) return;
+    // вне экрана WebView нет — и ждать нечего
+    if (!live || !onScreen || height || error) return;
     const timer = setTimeout(() => setError({ message: t("Нет ответа за 30 с", "No response in 30 s"), load: true }), MERMAID_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [live, height, error, source, nonce]);
+  }, [live, onScreen, height, error, source, nonce]);
   const onMessage = (e: WebViewMessageEvent) => {
     try {
       const m = JSON.parse(e.nativeEvent.data) as { h?: number; error?: string; load?: boolean };
@@ -285,7 +287,10 @@ export function MermaidCard({ source }: { source: string }) {
   }
   return (
     <View style={[st.card, { backgroundColor: "#111318" }]}>
-      {live ? (
+      {live && !onScreen ? (
+        // вне экрана WebView не держим, как и у живых страниц; высота прежняя — лента не прыгает
+        height ? <View style={{ height }} /> : null
+      ) : live ? (
         // в ленте — по ширине экрана и без касаний (иначе WebView забирает свайп), крупно — на весь экран
         <Pressable onPress={() => setFull(true)} disabled={!height}>
           <View pointerEvents="none">

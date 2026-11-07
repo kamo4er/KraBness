@@ -41,6 +41,18 @@ export function Chat({ id }: { id: string }) {
     const el = scroller.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [state.versions[id]]);
+  // и когда лента растёт сама, без событий сессии: живая страница подгоняет высоту, картинка догрузилась
+  const messagesEl = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const box = messagesEl.current;
+    if (!box) return;
+    const ro = new ResizeObserver(() => {
+      const el = scroller.current;
+      if (el && stick.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, [!!info]);
 
   if (!info) {
     return (
@@ -88,7 +100,7 @@ export function Chat({ id }: { id: string }) {
           setShowDown(fromBottom > 400);
         }}
       >
-        <div className="chat__messages">
+        <div className="chat__messages" ref={messagesEl}>
           {/* после сжатия контекста ранние сообщения свёрнуты: агент их помнит только пересказом */}
           {cut > 0 && !showOld && (
             <button className="linkish older" onClick={() => setShowOld(true)}>

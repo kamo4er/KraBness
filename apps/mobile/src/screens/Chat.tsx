@@ -1,5 +1,5 @@
 // Чат сессии: стрим сообщений, инструменты, подтверждения, смена модели и режима, отправка и остановка.
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, AppState, FlatList, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, ToastAndroid, View, type TextInputInstance } from "react-native";
 import { limitView, resolveFileRef, sessionActions, sessionSummary, type FileRef, type ClaudeLimits, type ListeningPort, type MessageView, type PermissionMode, type SessionActionId, type SessionInfo, type SlashCommand, type FileHit, t, locale } from "@kamharn/client";
 import { client, fmtSize, useEngines, useHub, useQuickPrompts } from "../store.ts";
@@ -64,6 +64,8 @@ export function Chat({ id }: { id: string }) {
     setOnScreen((cur) => (next.length === cur.size && next.every((k) => cur.has(k)) ? cur : new Set(next)));
   });
   const viewability = useRef({ itemVisiblePercentThreshold: 1 });
+  // FlatList сравнивает extraData по ссылке: новый объект — только когда поменялось что-то из двух
+  const visibleKey = useMemo(() => ({ onScreen, showDown }), [onScreen, showDown]);
   // режим «Разговор»: агент закончил ход — начало ответа звучит вслух
   const talk = useTalk(id, info?.kind === "dispatcher");
   const wasBusy = useRef(false);
@@ -162,12 +164,14 @@ export function Chat({ id }: { id: string }) {
         maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: 60 }}
         data={messages}
         keyExtractor={(m) => m.info.id}
-        renderItem={({ item }) => (
-          <ArtifactVisibleCtx.Provider value={onScreen.has(item.info.id)}>
+        // два последних сообщения у низа ленты видны всегда: пересчёт видимости бывает гонкой (карточка сменила высоту,
+        // лента подкрутилась), и пришедшая страница оставалась «на паузе», пока не прокрутишь
+        renderItem={({ item, index }) => (
+          <ArtifactVisibleCtx.Provider value={onScreen.has(item.info.id) || (!showDown && index < 2)}>
             <Message m={item} highlight={item.info.id === highlightId} />
           </ArtifactVisibleCtx.Provider>
         )}
-        extraData={onScreen}
+        extraData={visibleKey}
         onViewableItemsChanged={onViewable.current}
         viewabilityConfig={viewability.current}
         contentContainerStyle={st.messages}
@@ -416,8 +420,9 @@ function SpeakButton({ m }: { m: MessageView }) {
   );
 }
 
-// memo: смена видимых сообщений и прочие обновления ленты не перерисовывают неизменившиеся
-const Message = memo(function Message({ m, highlight }: { m: MessageView; highlight?: boolean }) {
+// без memo: редьюсер дописывает текст и части в тот же объект сообщения (applyDelta),
+// memo по ссылке замораживал ответ на полуслове до перезахода в сессию (0.1.57)
+function Message({ m, highlight }: { m: MessageView; highlight?: boolean }) {
   if (highlight) {
     return (
       <View style={st.hit}>
@@ -457,7 +462,7 @@ const Message = memo(function Message({ m, highlight }: { m: MessageView; highli
       </View>
     </View>
   );
-});
+}
 
 /** opencode получает список вложений в тексте — пользователю его показывать не нужно */
 function stripAttachmentNote(text: string): string {

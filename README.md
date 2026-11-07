@@ -9,7 +9,7 @@ And they keep going when Claude hits its limit.</p>
 <a href="https://github.com/kamo4er/KraBness/actions/workflows/test.yml"><img src="https://github.com/kamo4er/KraBness/actions/workflows/test.yml/badge.svg" alt="Tests"></a></p>
 
 <p align="center">
-  <img src="docs/screenshots/demo.gif" width="100%" alt="The same chat on the PC and on the phone: a task typed at the PC, the agent asks to edit a file on both, Allow is tapped on the phone, tests pass">
+  <img src="docs/screenshots/demo.gif" width="100%" alt="The same chat on the PC and on the phone: a task typed at the PC, the agent asks to edit a file on both, Allow is tapped on the phone, tests pass, then a live page from the agent runs right in the chat on both">
 </p>
 
 - **A remote for your agents.** [Claude Code](https://claude.com/claude-code) or [opencode](https://opencode.ai) works on your PC. Approvals, questions and files reach you on the phone, in the browser or in Telegram. Start at your desk, approve from the couch, read the result on the bus.

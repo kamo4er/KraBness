@@ -2,6 +2,26 @@
 
 What changed from release to release. Downloads are on the [releases](https://github.com/kamo4er/KraBness/releases) page.
 
+## 0.1.58
+
+**A fix release: in the 0.1.57 app, agent replies froze mid-word until you reopened the session, and a live page that arrived in an open chat could stay paused. Also a header that fits narrow phones, fixes for sessions in a separate branch and a new README GIF.**
+
+### Phone app
+- Replies update live again. In 0.1.57 the text and tool cards stopped at the first words and only showed in full after reopening the session.
+- The header of the session list fits narrow screens and large system fonts. Settings no longer slide off the edge: when space is short, "+ New" becomes "+", and the title is shortened if needed.
+- A live page that arrives in the open chat starts right away. In 0.1.57 it could stay "paused while off-screen" right on the screen and only started once you scrolled.
+- Mermaid diagrams off-screen release their browser view, like live pages do since 0.1.57.
+
+### Web
+- When a live page grows to its own height, the chat follows it down if you were at the bottom. Before, the end of the page was cut off below the fold.
+
+### Sessions in a separate branch
+- A session copy (git worktree) works when the project path comes through a junction or in the short 8.3 form (`C:\Users\LONGNA~1\...`). Before, the session could get a wrong folder, and workspace packages in the copy pointed to the main project.
+
+### For everyone checking the project
+- The tests on GitHub run on current actions (Node 24).
+- The README GIF is reshot on the current version and shows more: after the task is done, the agent sends a live page, and it runs in the chat on the PC and on the phone.
+
 ## 0.1.57
 
 **Live pages stay light: only the ones you can see run. Diagrams on the phone draw without internet, live pages reach Telegram as files, and the project now has automatic tests on GitHub and a changelog.**
