@@ -16,7 +16,7 @@ And they keep going when Claude hits its limit.</p>
 - **Not stuck on a limit.** Close to the Claude limit, carry on with any other model in one tap: a local one, a free one or one with your own key. Or let the session wait for the reset and continue by itself.
 - **Tasks with a review.** Give a goal. An agent works on its own branch, the hub runs your tests and a review by another model, and you merge the result with one tap.
 
-Self-hosted, any model, no vendor lock-in. The hub runs on Windows, the clients anywhere (web UI and an Android app).
+Self-hosted, any model, no vendor lock-in. The hub runs on Windows and, in beta, on macOS; the clients anywhere (web UI and an Android app).
 
 ## Quick start
 
@@ -25,6 +25,8 @@ Self-hosted, any model, no vendor lock-in. The hub runs on Windows, the clients 
    irm https://github.com/kamo4er/KraBness/releases/latest/download/install.ps1 | iex
    ```
    It checks Node.js, offers to install opencode, Claude Code and Tailscale, and opens http://127.0.0.1:7420.
+
+   On a Mac (beta), in Terminal: `curl -fsSL https://github.com/kamo4er/KraBness/releases/latest/download/install.sh | bash`. See [macOS](#macos-beta).
 2. Install [Tailscale](https://tailscale.com/download) on the phone and sign in to the same account as on the PC.
 3. Install the Android app (`KraBness-<version>.apk` from the [latest release](https://github.com/kamo4er/KraBness/releases/latest)), then in the web UI open Settings → Connect a device and scan the QR code with the app.
 
@@ -177,7 +179,7 @@ The model needs vision, otherwise it works without PC control. Your conversation
 
 ## Requirements
 
-- Windows 10 or 11 (the hub, its supervisor and the PC sleep and screenshot features are Windows only for now).
+- Windows 10 or 11, or macOS (beta, see [macOS](#macos-beta)).
 - [Node.js](https://nodejs.org) 22 or newer (24 LTS recommended). The installer offers to install it.
 - At least one agent:
   - **opencode**: `npm i -g opencode-ai`. It runs free and local models out of the box.
@@ -220,6 +222,29 @@ The installer:
 For a quick try without the supervisor, `scripts\start-hub.cmd` is enough (updates then have to be installed by hand). One installation per PC: autostart and the watchdog task use fixed names.
 
 </details>
+
+### macOS (beta)
+
+In Terminal:
+
+```bash
+curl -fsSL https://github.com/kamo4er/KraBness/releases/latest/download/install.sh | bash
+```
+
+No sudo and no Homebrew. The installer:
+- puts Node.js 24 (the official archive from nodejs.org, checked against its checksum) into `~/KraBness/runtime`;
+- downloads the latest release to `~/KraBness`, installs the dependencies and builds the web UI;
+- offers to install opencode and Claude Code with that Node;
+- starts the hub as a launchd agent (with every login, if you say so) and opens http://127.0.0.1:7420.
+
+Control it with `~/KraBness/scripts/krabness start | stop | restart | status | logs | uninstall`. Updates and restart from the UI work as on Windows.
+
+What's different on a Mac:
+- Install [Tailscale](https://tailscale.com/download/mac) yourself (it's an app).
+- Screenshots need the Screen Recording permission: System Settings → Privacy & Security → Screen & System Audio Recording. macOS asks the first time.
+- Not on the Mac yet: the Dispatcher controlling the computer (mouse and keyboard) and voice on the computer.
+
+Status: every change is tested on a real Mac in CI (Apple Silicon: unit tests, a clean install, restart, update and rollback), but not yet by people. If you try it, please [open an issue](https://github.com/kamo4er/KraBness/issues) with what worked and what didn't.
 
 ## Connect your phone
 
@@ -325,7 +350,7 @@ Synology: Control Panel → Task Scheduler → Create → Triggered Task, event 
 
 **Are updates safe?** Every release archive is signed by the author's key, and the hub refuses to install an archive without a valid signature, even if it comes from the right GitHub page.
 
-**macOS or Linux?** The clients work anywhere. The hub itself is Windows only for now (its supervisor, sleep and screenshot features).
+**macOS or Linux?** The clients work anywhere. The hub runs on Windows and, in beta, on macOS ([how](#macos-beta)). Linux isn't supported yet.
 
 **Why "kamharn" in some names?** It's the project's working name. The app package (`dev.kamharn.app`), the config file and the Windows tasks keep it, so that updates keep working for everyone who already installed it.
 

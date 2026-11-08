@@ -4,17 +4,26 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import WebSocket from "ws";
 import { createHub } from "../../src/hub.ts";
 
+// «чужой» адрес: 127.0.0.2 — второй loopback (Windows, Linux); на маке loopback только 127.0.0.1 — берём адрес в сети
+const other =
+  process.platform === "darwin"
+    ? Object.values(networkInterfaces())
+        .flat()
+        .find((a) => a && a.family === "IPv4" && !a.internal)?.address
+    : "127.0.0.2";
+
 test("close() завершается, даже когда к хабу подключены WebSocket-клиенты на обоих адресах", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "kamharn-shutdown-"));
-  // 127.0.0.2 — второй loopback-адрес: для хаба это «чужое» устройство (как телефон через Tailscale)
+  // второй адрес для хаба — «чужое» устройство (как телефон через Tailscale)
+  assert.ok(other, "нет второго адреса для проверки");
   const hub = await createHub({
     configPath: join(tmp, "kamharn.json"),
     overrides: {
-      listen: ["127.0.0.1", "127.0.0.2"],
+      listen: ["127.0.0.1", other!],
       port: 0,
       dataDir: join(tmp, "data"),
       roots: [tmp],
@@ -23,7 +32,7 @@ test("close() завершается, даже когда к хабу подкл
     log: () => {},
   });
   const [local, remote] = hub.urls;
-  assert.ok(remote?.includes("127.0.0.2"), "хаб слушает второй адрес: " + hub.urls.join(", "));
+  assert.ok(remote?.includes(other!), "хаб слушает второй адрес: " + hub.urls.join(", "));
 
   const { code } = await (await fetch(local + "/api/pair/start", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).json();
   const { token } = await (
