@@ -6,7 +6,7 @@
 // Только встроенные модули node: node_modules в этот момент меняется.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 const mode = process.argv[2];
@@ -18,8 +18,8 @@ const root = resolve(arg("root") ?? ".");
 const data = resolve(arg("data") ?? join(root, "data"));
 const dir = join(data, "updates");
 const backup = join(dir, "backup");
-// это не трогаем никогда: данные, настройки, рабочие папки
-const KEEP = new Set(["data", "config", "tmp", ".git", ".env", "node_modules"]);
+// это не трогаем никогда: данные, настройки, рабочие папки, свой Node на маке (runtime)
+const KEEP = new Set(["data", "config", "tmp", ".git", ".env", "node_modules", "runtime"]);
 // своё внутри заменяемых папок: ключ подписи и Firebase, сборка приложения
 const PRESERVE = ["apps/mobile/credentials", "apps/mobile/node_modules", "apps/mobile/android"];
 
@@ -100,6 +100,12 @@ function apply() {
     for (const e of old) move(join(root, e), join(backup, e));
     for (const e of entries) move(join(stage, e), join(root, e));
     for (const pth of PRESERVE) if (existsSync(join(backup, pth)) && !existsSync(join(root, pth))) move(join(backup, pth), join(root, pth));
+    // выпуск собирается на Windows: в zip нет бита исполнения, а krabness и сценарии на маке запускают напрямую
+    if (process.platform !== "win32" && existsSync(join(root, "scripts"))) {
+      for (const f of ["scripts/krabness", ...readdirSync(join(root, "scripts")).filter((x) => x.endsWith(".sh")).map((x) => `scripts/${x}`)]) {
+        if (existsSync(join(root, f))) chmodSync(join(root, f), 0o755);
+      }
+    }
     if (!arg("skip-npm")) {
       run("npm", ["ci", "--no-audit", "--no-fund"]);
       run("npm", ["run", "web:build"]);
@@ -108,6 +114,8 @@ function apply() {
     log(`failed: ${e.message}; rolling back to ${p.from}`);
     try {
       restore(applied);
+      // откат сделан: без applied.json сторож не примет это за оборванное обновление и не откатит второй раз
+      rmSync(join(dir, "applied.json"), { force: true });
     } catch (e2) {
       log(`ROLLBACK FAILED: ${e2.message}. Old files are in ${backup}`);
     }

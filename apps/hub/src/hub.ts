@@ -58,6 +58,8 @@ export function tailscaleIp(): string | undefined {
   // PATH у уже запущенных процессов может не знать про свежий Tailscale — пробуем и стандартный путь
   const bins = ["tailscale"];
   if (process.platform === "win32") bins.push(join(process.env.ProgramFiles ?? "C:\\Program Files", "Tailscale", "tailscale.exe"));
+  // приложение Tailscale для мака (App Store и с сайта) свой CLI в PATH не кладёт
+  if (process.platform === "darwin") bins.push("/Applications/Tailscale.app/Contents/MacOS/Tailscale");
   for (const bin of bins) {
     try {
       const r = spawnSync(bin, ["ip", "-4"], { encoding: "utf8", timeout: 5000, windowsHide: true });

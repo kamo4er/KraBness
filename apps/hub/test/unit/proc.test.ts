@@ -15,11 +15,11 @@ test("descendants: процесс с переиспользованным PID р
   assert.deepEqual(descendants(999, rows), []);
 });
 
-test("killTree убивает настоящее дерево процессов", { skip: process.platform !== "win32" }, async () => {
-  // родитель запускает ребёнка и печатает его PID
+test("killTree убивает настоящее дерево процессов (и внука, который не слушает SIGTERM)", async () => {
+  // родитель запускает ребёнка и печатает его PID; ребёнок глушит SIGTERM — на POSIX его добьёт SIGKILL через 3 с
   const parent = spawn(
     process.execPath,
-    ["-e", "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); console.log(c.pid); setInterval(()=>{},1000)"],
+    ["-e", "const c=require('child_process').spawn(process.execPath,['-e','process.on(\"SIGTERM\",()=>{});setInterval(()=>{},1000)'],{stdio:'ignore'}); console.log(c.pid); setInterval(()=>{},1000)"],
     { stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
   );
   const childPid = await new Promise<number>((r) => parent.stdout!.once("data", (d: Buffer) => r(Number(String(d).trim()))));
@@ -35,6 +35,6 @@ test("killTree убивает настоящее дерево процессов
   const exited = new Promise((r) => parent.once("exit", r));
   killTree(parent);
   await exited;
-  await new Promise((r) => setTimeout(r, 300));
+  for (let i = 0; i < 50 && alive(childPid); i++) await new Promise((r) => setTimeout(r, 100));
   assert.ok(!alive(childPid), "ребёнок тоже убит");
 });

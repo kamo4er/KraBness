@@ -1,6 +1,6 @@
 // Обновления: раз в сутки хаб смотрит GitHub Releases, в вебе и приложении появляется плашка «Вышла X».
 // «Обновить»: хаб скачивает выпуск (исходники zip и APK) в data/updates/stage, пишет pending.json и уходит на перезапуск.
-// Сторож (scripts/hub-service.ps1) до старта хаба вызывает scripts/apply-update.mjs: старые файлы — в бэкап, новые — на место,
+// Сторож (scripts/hub-service.ps1, на маке scripts/supervisor.mjs) до старта хаба вызывает scripts/apply-update.mjs: старые файлы — в бэкап, новые — на место,
 // npm ci, сборка веба. Пока хаб работает, файлы node_modules заняты, поэтому менять их можно только между запусками.
 // Новый хаб сразу упал — сторож откатывает. Из папки git (разработка) не ставим: там обновляются через git pull.
 import { execFile } from "node:child_process";
@@ -11,6 +11,7 @@ import type { UpdateRelease, UpdateStatus } from "@kamharn/protocol";
 import type { ConfigStore } from "./config.ts";
 import { HttpError } from "./sessions.ts";
 import { L } from "./lang.ts";
+import { supervisorHint } from "./proc.ts";
 
 export const DEFAULT_REPO = "kamo4er/KraBness";
 /**
@@ -290,7 +291,7 @@ export class Updates {
     const st = this.status();
     if (st.reason === "git") throw new HttpError(409, L("Хаб запущен из папки git — обновляй через git pull", "The hub runs from a git folder — update with git pull"));
     if (st.reason === "manual")
-      throw new HttpError(409, L("Хаб запущен вручную, без сторожа — обновление не поставить. Запусти scripts\\hub-service.ps1", "The hub was started manually, without the supervisor — can't install the update. Run scripts\\hub-service.ps1"));
+      throw new HttpError(409, L(`Хаб запущен вручную, без сторожа — обновление не поставить. Запусти ${supervisorHint()}`, `The hub was started manually, without the supervisor — can't install the update. Run ${supervisorHint()}`));
     if (this.state !== "idle") throw new HttpError(409, L("Подожди, хаб уже занят обновлением", "Wait, the hub is already busy with the update"));
     const rel = this.latest;
     if (!rel || !st.available) throw new HttpError(409, L("Новой версии нет", "No new version"));

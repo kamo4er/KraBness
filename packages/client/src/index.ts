@@ -112,10 +112,12 @@ export interface HubInfo {
   urls: string[];
   version: string;
   startedAt?: number;
-  /** запущен сторожем scripts/hub-service.ps1 — умеет перезапускаться */
+  /** запущен сторожем (Windows: scripts/hub-service.ps1, macOS: launchd + scripts/supervisor.mjs) — умеет перезапускаться */
   supervised: boolean;
   /** умеет усыплять ПК (POST /api/hub/sleep) */
   canSleep?: boolean;
+  /** ОС хаба (process.platform): подсказки про сторож и установку у Windows и мака разные */
+  platform?: string;
 }
 
 export interface UploadedFile {

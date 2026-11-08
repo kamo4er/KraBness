@@ -2,6 +2,9 @@
 // Статус — у движка (`claude auth status`). Здесь: свой API-ключ Anthropic (вместо подписки; хаб передаёт его claude
 // как ANTHROPIC_API_KEY, ключ проверяется у Anthropic до сохранения и наружу не отдаётся) и окно входа на ПК.
 import { spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fetch as undiciFetch } from "undici";
 import type { ClaudeAuthInfo } from "@kamharn/protocol";
 import type { ConfigStore } from "./config.ts";
@@ -18,9 +21,29 @@ export interface ClaudeLoginDeps {
   log: (m: string) => void;
 }
 
-/** Окно cmd на рабочем столе ПК с `claude auth login`: дальше браузер, как при обычном входе. */
+/** одинарные кавычки для sh */
+const sq = (s: string) => `'${s.replace(/'/g, `'"'"'`)}'`;
+
+/**
+ * macOS: окно Терминала с `claude auth login`. Терминал запускает свою логин-оболочку и окружение хаба не наследует,
+ * поэтому всё, чем env отличается от окружения хаба, выписывается в сам сценарий (.command, удаляет себя при старте).
+ */
+function openMacTerminal(bin: string, env: NodeJS.ProcessEnv): void {
+  const dir = mkdtempSync(join(tmpdir(), "krabness-login-"));
+  const file = join(dir, "claude-login.command");
+  const exports = Object.entries(env)
+    .filter(([k, v]) => v !== undefined && process.env[k] !== v && /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
+    .map(([k, v]) => `export ${k}=${sq(v!)}`);
+  writeFileSync(file, ["#!/bin/zsh -l", `rm -rf ${sq(dir)}`, ...exports, `${sq(bin)} auth login`, ""].join("\n"), { mode: 0o700 });
+  const p = spawn("open", ["-a", "Terminal", file], { detached: true, stdio: "ignore" });
+  p.on("error", () => {});
+  p.unref();
+}
+
+/** Окно терминала на рабочем столе ПК с `claude auth login`: дальше браузер, как при обычном входе. */
 function openLoginWindow(bin: string, env: NodeJS.ProcessEnv): void {
-  if (process.platform !== "win32") throw new HttpError(501, L("Вход из интерфейса пока только на Windows: запусти `claude auth login` в терминале", "Signing in from the UI is Windows only for now: run `claude auth login` in a terminal"));
+  if (process.platform === "darwin") return openMacTerminal(bin, env);
+  if (process.platform !== "win32") throw new HttpError(501, L("Вход из интерфейса пока только на Windows и macOS: запусти `claude auth login` в терминале", "Signing in from the UI is Windows and macOS only for now: run `claude auth login` in a terminal"));
   // start открывает отдельное видимое окно; кавычки вокруг пути — на случай пробелов, внешние снимает cmd /k
   const p = spawn("cmd.exe", ["/c", `start "Claude Code" cmd /k ""${bin}" auth login"`], { detached: true, stdio: "ignore", windowsVerbatimArguments: true, env });
   p.unref();

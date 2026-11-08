@@ -21,6 +21,9 @@ const freePort = () =>
     });
   });
 
+/** порт уже слушает и отвечает */
+const reach = (u: string) => fetch(u).then((r) => (void r.body?.cancel(), true), () => false);
+
 async function until(f: () => Promise<boolean> | boolean, ms = 8000): Promise<void> {
   const end = Date.now() + ms;
   while (Date.now() < end) {
@@ -64,7 +67,7 @@ test("туннель на VPS: поднимается, переподключа�
     assert.equal((await api("PUT", "/api/remote", { host: "1.2.3.4", user: "ok", url: "https://x.example/path" })).status, 400);
     assert.equal((await api("PUT", "/api/remote", { host: "1.2.3.4", user: "ok", url: "http://x.example" })).status, 400, "токен по http через интернет — нет");
     assert.equal((await api("PUT", "/api/remote", { host: "1.2.3.4", user: "ok", enabled: "false" })).status, 400);
-    if (process.platform === "win32") await Promise.race([orphanExit, new Promise((_, rej) => setTimeout(() => rej(new Error("сирота жива")), 5000))]);
+    await Promise.race([orphanExit, new Promise((_, rej) => setTimeout(() => rej(new Error("сирота жива")), 5000))]);
     // по IP адрес на sslip.io подставляется сам
     st = (await api("PUT", "/api/remote", { host: "1.2.3.4", user: "ok", enabled: false })).j;
     assert.equal(st.settings.url, "https://krab.1-2-3-4.sslip.io");
@@ -74,7 +77,8 @@ test("туннель на VPS: поднимается, переподключа�
     const pub = `http://127.0.0.1:${vpsPort}`;
     st = (await api("PUT", "/api/remote", { host: "127.0.0.1", user: "ok", remotePort: vpsPort, url: pub })).j;
     assert.equal(st.state, "connecting");
-    await until(async () => (await api("GET", "/api/remote")).j.state === "up");
+    // «up» значит, что ssh прожил upAfterMs; под нагрузкой поддельный ssh ещё мог не начать слушать — ждём и порт
+    await until(async () => (await api("GET", "/api/remote")).j.state === "up" && (await reach(`${pub}/api/health`)));
     assert.ok(hub.urls.includes(pub), "публичный адрес среди известных");
     assert.ok(hub.urls.includes("https://nas.example"), "адрес за своим прокси (publicUrls) — тоже");
     assert.ok(!hub.urls.some((u) => u.includes("192.0.2.1")), "недоступный адрес не в списке");
@@ -112,7 +116,7 @@ test("туннель на VPS: поднимается, переподключа�
     // ssh упал — хаб переподключается сам
     const runs = readFileSync(log, "utf8").trim().split("\n");
     process.kill((JSON.parse(runs.at(-1)!) as { pid: number }).pid);
-    await until(async () => readFileSync(log, "utf8").trim().split("\n").length > runs.length && (await api("GET", "/api/remote")).j.state === "up");
+    await until(async () => readFileSync(log, "utf8").trim().split("\n").length > runs.length && (await api("GET", "/api/remote")).j.state === "up" && (await reach(`${pub}/api/health`)));
     assert.equal((await fetch(`${pub}/api/health`)).status, 200);
 
     // ключ не принят — понятная ошибка

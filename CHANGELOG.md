@@ -2,6 +2,25 @@
 
 What changed from release to release. Downloads are on the [releases](https://github.com/kamo4er/KraBness/releases) page.
 
+## 0.1.60
+
+**KraBness on macOS, in beta: one command in Terminal installs it, the hub runs as a launchd agent, and updates from the UI work as on Windows. Testers wanted.**
+
+### macOS (beta)
+- Install in Terminal:
+
+  ```bash
+  curl -fsSL https://github.com/kamo4er/KraBness/releases/latest/download/install.sh | bash
+  ```
+
+  No sudo and no Homebrew. Node.js 24 comes as the official archive from nodejs.org (checked against its checksum) into `~/KraBness/runtime`, and opencode and Claude Code are installed with it.
+- The hub runs as a launchd agent, with every login if you say so. Control it with `~/KraBness/scripts/krabness start | stop | restart | status | logs | uninstall`.
+- Restart and "Update" from the UI work. A release that crashes right after start is rolled back, as on Windows.
+- On the Mac the session terminal and auto-check run commands in your login shell (zsh), so your usual PATH (Homebrew, nvm) works there.
+- Also on the Mac: screenshots with the Screen Recording permission, sleep from the phone, Claude sign-in in a Terminal window, the dev server list for previews.
+- Not on the Mac yet: the Dispatcher controlling the computer (mouse and keyboard) and voice on the computer.
+- How it was tested: on a real Mac in CI (Apple Silicon). That covered all unit tests, a clean install with the agents, the hub under launchd, restart, and an update with a rollback. People haven't tried it yet. If you have a Mac, the [checklist for testers](https://github.com/kamo4er/KraBness/blob/main/docs/mac-testing.md) takes about 20 minutes, and an issue with the results helps a lot.
+
 ## 0.1.59
 
 **A team of agents for tasks: an analyst writes the spec with you, a designer draws a clickable prototype, an architect reviews it, a developer builds it and a tester checks it against the criteria. Also new folders right from the folder picker, a git repository for a task in one tap and setting up your own server by address, login and password.**
