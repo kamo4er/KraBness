@@ -34,7 +34,7 @@ check "it is a new hub process ($before -> $after)" '[ "$after" != "$before" ]'
 check "supervisor saw exit code 75" 'grep -q "hub exited with code 75" "$DIR/data/logs/supervisor.log"'
 
 # the terminal runs commands in the login shell, with the user's PATH
-check "krabness status" '"$K" status | grep -q "hub: answers"'
+check "krabness status" '"$K" status > /tmp/krab-status.txt && grep -q "hub: answers" /tmp/krab-status.txt'
 "$K" stop
 sleep 2
 check "stopped" '! curl -fsS --max-time 2 "$URL/api/health" >/dev/null 2>&1'
