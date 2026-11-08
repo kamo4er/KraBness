@@ -75,6 +75,16 @@ function applyUpdate(mode) {
 }
 
 log(`started (node ${process.version}, pid ${process.pid}, port ${port})`);
+// обновление оборвалось посреди (выход из системы, SIGKILL от launchd во время npm ci): applied.json есть,
+// а installed.json всё ещё про старую версию — файлы перемешаны, возвращаем прежнюю
+{
+  const applied = readJson(join(dataDir, "updates", "applied.json"));
+  const installed = readJson(join(dataDir, "updates", "installed.json"));
+  if (applied?.version && installed?.version !== applied.version && !existsSync(join(dataDir, "updates", "pending.json"))) {
+    log(`the update to ${applied.version} was interrupted, rolling back to ${applied.from}`);
+    applyUpdate("rollback");
+  }
+}
 let fast = 0;
 while (!stopping) {
   for (let waited = 0; await portBusy(); waited += 5) {

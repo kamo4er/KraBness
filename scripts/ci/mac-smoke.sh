@@ -17,6 +17,7 @@ check "platform is darwin" '[ "$(json /api/hub j.platform)" = darwin ]'
 check "can sleep (pmset)" '[ "$(json /api/hub j.canSleep)" = true ]'
 check "autostart plist in LaunchAgents" '[ -f "$HOME/Library/LaunchAgents/dev.krabness.hub.plist" ]'
 check "launchd agent loaded" 'launchctl print "gui/$(id -u)/dev.krabness.hub" >/dev/null'
+check "install folder is private (700)" '[ "$(stat -f %Lp "$DIR")" = 700 ]'
 # the agents the installer put next to its Node are found by the hub under launchd's bare PATH
 engine() { json /api/engines "j.find(e=>e.id==='$1')?.$2"; }
 claude_found() { for _ in $(seq 1 30); do [ "$(engine claude auth?.installed)" = true ] && return 0; sleep 2; done; return 1; }
@@ -33,7 +34,7 @@ after="$(json /api/hub j.startedAt)"
 check "it is a new hub process ($before -> $after)" '[ "$after" != "$before" ]'
 check "supervisor saw exit code 75" 'grep -q "hub exited with code 75" "$DIR/data/logs/supervisor.log"'
 
-# the terminal runs commands in the login shell, with the user's PATH
+# control from the command line: status, stop, start, restart
 check "krabness status" '"$K" status > /tmp/krab-status.txt && grep -q "hub: answers" /tmp/krab-status.txt'
 "$K" stop
 sleep 2

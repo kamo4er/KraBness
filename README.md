@@ -244,7 +244,7 @@ What's different on a Mac:
 - Screenshots need the Screen Recording permission: System Settings → Privacy & Security → Screen & System Audio Recording. macOS asks the first time.
 - Not on the Mac yet: the Dispatcher controlling the computer (mouse and keyboard) and voice on the computer.
 
-Status: every change is tested on a real Mac in CI (Apple Silicon: unit tests, a clean install, restart, update and rollback), but not yet by people. If you try it, please [open an issue](https://github.com/kamo4er/KraBness/issues) with what worked and what didn't.
+Status: every change is tested on a real Mac in CI (Apple Silicon: unit tests, a clean install, restart, update and rollback), but not yet by people. If you try it, please go through the [checklist for testers](docs/mac-testing.md) and [open an issue](https://github.com/kamo4er/KraBness/issues) with what worked and what didn't.
 
 ## Connect your phone
 

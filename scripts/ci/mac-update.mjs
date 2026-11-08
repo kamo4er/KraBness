@@ -40,6 +40,8 @@ function prepare() {
       const main = join(dir, "apps", "hub", "src", "main.ts");
       writeFileSync(main, 'throw new Error("ci: this version crashes on start");\n' + readFileSync(main, "utf8"));
     }
+    // like a real release built on Windows: files rw for everyone, no exec bits
+    execFileSync("find", [dir, "-type", "f", "-exec", "chmod", "666", "{}", "+"]);
     const zip = join(out, `krabness-${version}.zip`);
     rmSync(zip, { force: true });
     execFileSync("zip", ["-qr", zip, "."], { cwd: dir });
@@ -113,6 +115,10 @@ async function run() {
   await api("POST", "/api/update/install");
   check(await waitVersion(NEW, 600), `updated to ${NEW} (npm ci and the web build ran under the supervisor)`);
   check(existsSync(join(dir, "runtime", "node", "bin", "node")), "own Node survived the update");
+  // the release zip has no exec bits: apply-update gives them back, krabness keeps working
+  check((statSync(join(dir, "scripts", "krabness")).mode & 0o111) !== 0, "scripts/krabness is still executable after the update");
+  check((statSync(join(dir, "package.json")).mode & 0o022) === 0, "installed files aren't writable by others");
+  execFileSync(join(dir, "scripts", "krabness"), ["status"], { stdio: "inherit" });
 
   latest = CRASH;
   st = await api("POST", "/api/update/check");

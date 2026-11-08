@@ -93,9 +93,17 @@ export function killPidTree(rootPid: number): void {
         /* уже нет */
       }
     }
-    // кто не ушёл по-хорошему за 3 с — SIGKILL
+    // кто не ушёл по-хорошему за 3 с — SIGKILL. Сверять дерево заново нельзя: после смерти родителя дети уходят
+    // к launchd (ppid 1). PID за 3 с на POSIX почти не переиспользуются — номера идут по кругу до 99999
     setTimeout(() => {
-      for (const pid of pids) if (alive(pid)) process.kill(pid, "SIGKILL");
+      for (const pid of pids) {
+        if (!alive(pid)) continue;
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* ушёл между проверкой и kill */
+        }
+      }
     }, 3000).unref();
     return;
   }
@@ -110,7 +118,9 @@ export function killPidTree(rootPid: number): void {
  * а Homebrew, nvm и прочее прописываются в профиле оболочки.
  */
 export function posixShell(command: string): [string, string[]] {
-  const sh = process.env.SHELL && /^\/[\w./-]+$/.test(process.env.SHELL) ? process.env.SHELL : process.platform === "darwin" ? "/bin/zsh" : "/bin/sh";
+  // только POSIX-оболочки: у fish и nu другой синтаксис команд, tcsh не понимает -lc
+  const own = process.env.SHELL;
+  const sh = own && /^\/[\w./-]+\/(zsh|bash|sh|ksh|dash)$/.test(own) ? own : process.platform === "darwin" ? "/bin/zsh" : "/bin/sh";
   return [sh, ["-lc", command]];
 }
 
