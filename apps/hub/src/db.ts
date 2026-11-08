@@ -1,0 +1,439 @@
+// SQLite-хранилище хаба: сессии, журнал событий (для replay), устройства, файлы.
+import { DatabaseSync } from "node:sqlite";
+import type { TaskInfo, EngineId, ModelRef, PermissionMode, SessionEvent, SessionInfo, SessionStatus, StoredEvent, SessionGroup, WorktreeInfo } from "@kamharn/protocol";
+import { L } from "./lang.ts";
+import type { UsageRow } from "./usage.ts";
+
+/** суммы колонок расхода; unknown_cost — записи без цены */
+const SUMS = "SUM(input) AS input, SUM(output) AS output, SUM(cache_write) AS cache_write, SUM(cache_read) AS cache_read, SUM(cost) AS cost, SUM(cost IS NULL) AS unknown_cost";
+
+export interface SessionRow extends SessionInfo {
+  engineSessionId: string;
+}
+
+export interface DeviceRow {
+  id: string;
+  name: string;
+  tokenHash: string;
+  createdAt: number;
+  lastSeen: number;
+  fcmToken: string | null;
+}
+
+export interface FileRow {
+  id: string;
+  sessionId: string | null;
+  direction: "in" | "out";
+  name: string;
+  mime: string;
+  size: number;
+  path: string;
+  sha256: string;
+  createdAt: number;
+}
+
+type Row = Record<string, unknown>;
+
+export class Db {
+  readonly db: DatabaseSync;
+
+  constructor(file: string) {
+    this.db = new DatabaseSync(file);
+    this.db.exec(`
+      PRAGMA journal_mode = WAL;
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY,
+        engine TEXT NOT NULL,
+        engine_session_id TEXT NOT NULL,
+        directory TEXT NOT NULL,
+        title TEXT NOT NULL,
+        model_json TEXT NOT NULL,
+        permission_mode TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        last_seq INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS events (
+        session_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        ts INTEGER NOT NULL,
+        event_json TEXT NOT NULL,
+        PRIMARY KEY (session_id, seq)
+      );
+      CREATE TABLE IF NOT EXISTS devices (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL,
+        fcm_token TEXT
+      );
+      CREATE TABLE IF NOT EXISTS files (
+        id TEXT PRIMARY KEY,
+        session_id TEXT,
+        direction TEXT NOT NULL,
+        name TEXT NOT NULL,
+        mime TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        path TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `);
+    // колонки, добавленные позже: у старых баз их нет
+    const cols = (this.db.prepare(`PRAGMA table_info(sessions)`).all() as Row[]).map((c) => String(c.name));
+    if (!cols.includes("resume_at")) this.db.exec(`ALTER TABLE sessions ADD COLUMN resume_at INTEGER NOT NULL DEFAULT 0`);
+    if (!cols.includes("worktree_json")) this.db.exec(`ALTER TABLE sessions ADD COLUMN worktree_json TEXT`);
+    if (!cols.includes("group_id")) this.db.exec(`ALTER TABLE sessions ADD COLUMN group_id TEXT`);
+    if (!cols.includes("auto_check")) this.db.exec(`ALTER TABLE sessions ADD COLUMN auto_check INTEGER NOT NULL DEFAULT 0`);
+    if (!cols.includes("effort")) this.db.exec(`ALTER TABLE sessions ADD COLUMN effort TEXT`);
+    if (!cols.includes("task_id")) this.db.exec(`ALTER TABLE sessions ADD COLUMN task_id TEXT`);
+    if (!cols.includes("kind")) this.db.exec(`ALTER TABLE sessions ADD COLUMN kind TEXT`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, icon TEXT, prompt TEXT, sort INTEGER NOT NULL DEFAULT 0)`);
+    const gcols = (this.db.prepare(`PRAGMA table_info(groups)`).all() as Row[]).map((c) => String(c.name));
+    if (!gcols.includes("no_user_rules")) this.db.exec(`ALTER TABLE groups ADD COLUMN no_user_rules INTEGER NOT NULL DEFAULT 0`);
+    // задача целиком лежит в JSON: её поля меняются чаще, чем стоит плодить колонки
+    this.db.exec(`CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, json TEXT NOT NULL)`);
+    // расход токенов: запись на сообщение/ход; сессию удалили — расход остаётся (история месяца)
+    this.db.exec(`CREATE TABLE IF NOT EXISTS usage (key TEXT PRIMARY KEY, session_id TEXT NOT NULL, ts INTEGER NOT NULL, day TEXT NOT NULL, engine TEXT NOT NULL, model TEXT NOT NULL,
+      input INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0, cache_write INTEGER NOT NULL DEFAULT 0, cache_read INTEGER NOT NULL DEFAULT 0, cost REAL)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS usage_day ON usage(day)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS usage_session ON usage(session_id)`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    // поиск по всем чатам: тексты сообщений (не инструменты и не рассуждения); часть, обновлённая повторно, заменяет старую строку
+    this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(text, tokenize = 'unicode61 remove_diacritics 2')`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS search_parts (part_key TEXT PRIMARY KEY, rid INTEGER NOT NULL, session_id TEXT NOT NULL, message_id TEXT NOT NULL, role TEXT NOT NULL, ts INTEGER NOT NULL)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS search_parts_session ON search_parts(session_id)`);
+  }
+
+  // ---------- поиск по всем чатам ----------
+
+  /** Текст части сообщения в индекс (повтор той же части — замена). */
+  indexText(sessionId: string, messageId: string, partId: string, role: string, ts: number, text: string): void {
+    const key = `${sessionId}|${partId}`;
+    const old = this.db.prepare(`SELECT rid FROM search_parts WHERE part_key = ?`).get(key) as Row | undefined;
+    if (old) this.db.prepare(`DELETE FROM search_fts WHERE rowid = ?`).run(Number(old.rid));
+    if (!text.trim()) {
+      if (old) this.db.prepare(`DELETE FROM search_parts WHERE part_key = ?`).run(key);
+      return;
+    }
+    const r = this.db.prepare(`INSERT INTO search_fts (text) VALUES (?)`).run(text);
+    this.db
+      .prepare(`INSERT INTO search_parts (part_key, rid, session_id, message_id, role, ts) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(part_key) DO UPDATE SET rid = excluded.rid, role = excluded.role, ts = excluded.ts`)
+      .run(key, Number(r.lastInsertRowid), sessionId, messageId, role, ts);
+  }
+
+  /** Слова запроса — все обязательны, каждое как начало слова (у FTS нет русских окончаний: «крабик» найдёт «крабика»). */
+  searchText(query: string, limit = 20): Array<{ sessionId: string; title: string; messageId: string; role: string; ts: number; snippet: string }> {
+    const terms = (query.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []).slice(0, 12);
+    if (!terms.length) return [];
+    const match = terms.map((t) => `"${t}"*`).join(" ");
+    const rows = this.db
+      .prepare(
+        `SELECT p.session_id, s.title, p.message_id, p.role, p.ts, snippet(search_fts, 0, '**', '**', '…', 16) AS snip
+         FROM search_fts JOIN search_parts p ON p.rid = search_fts.rowid JOIN sessions s ON s.id = p.session_id
+         WHERE search_fts MATCH ? ORDER BY rank LIMIT ?`,
+      )
+      .all(match, Math.min(Math.max(1, limit), 100)) as Row[];
+    return rows.map((r) => ({ sessionId: String(r.session_id), title: String(r.title), messageId: String(r.message_id), role: String(r.role), ts: Number(r.ts), snippet: String(r.snip) }));
+  }
+
+  private dropSearch(sessionId: string): void {
+    const rids = this.db.prepare(`SELECT rid FROM search_parts WHERE session_id = ?`).all(sessionId) as Row[];
+    for (const r of rids) this.db.prepare(`DELETE FROM search_fts WHERE rowid = ?`).run(Number(r.rid));
+    this.db.prepare(`DELETE FROM search_parts WHERE session_id = ?`).run(sessionId);
+  }
+
+  /** Индекс по журналу, который был до появления поиска (один раз): последняя версия каждой текстовой части. */
+  backfillSearch(): number {
+    if (this.getMeta("search.v1")) return 0;
+    const roles = new Map<string, string>();
+    const parts = new Map<string, { sessionId: string; messageId: string; partId: string; ts: number; text: string }>();
+    for (const r of this.db.prepare(`SELECT session_id, ts, event_json FROM events ORDER BY session_id, seq`).iterate() as Iterable<Row>) {
+      const sid = String(r.session_id);
+      const ev = JSON.parse(String(r.event_json)) as SessionEvent;
+      if (ev.type === "message.upserted") roles.set(`${sid}|${ev.message.id}`, ev.message.role);
+      else if (ev.type === "part.upserted" && ev.part.type === "text") parts.set(`${sid}|${ev.part.id}`, { sessionId: sid, messageId: ev.messageId, partId: ev.part.id, ts: Number(r.ts), text: ev.part.text });
+    }
+    this.db.exec("BEGIN");
+    try {
+      for (const p of parts.values()) this.indexText(p.sessionId, p.messageId, p.partId, roles.get(`${p.sessionId}|${p.messageId}`) ?? "assistant", p.ts, p.text);
+      this.setMeta("search.v1", String(Date.now()));
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+    return parts.size;
+  }
+
+  getMeta(key: string): string | undefined {
+    const r = this.db.prepare(`SELECT value FROM meta WHERE key = ?`).get(key) as Row | undefined;
+    return r ? String(r.value) : undefined;
+  }
+
+  setMeta(key: string, value: string): void {
+    this.db.prepare(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value);
+  }
+
+  putUsage(r: UsageRow): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO usage (key, session_id, ts, day, engine, model, input, output, cache_write, cache_read, cost) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(r.key, r.sessionId, r.ts, r.day, r.engine, r.model, r.input, r.output, r.cacheWrite, r.cacheRead, r.cost ?? (null as unknown as number));
+  }
+
+  /** Суммы по сессиям (для списка и шапки чата). */
+  usageBySession(id?: string): Row[] {
+    const where = id ? `WHERE session_id = ?` : "";
+    return this.db.prepare(`SELECT session_id, ${SUMS} FROM usage ${where} GROUP BY session_id`).all(...(id ? [id] : [])) as Row[];
+  }
+
+  usageQuery(from: string, to: string): { firstDay?: string; total: Row; days: Row[]; models: Row[]; sessions: Row[] } {
+    const first = this.db.prepare(`SELECT MIN(day) AS d FROM usage`).get() as Row | undefined;
+    const range = `WHERE day BETWEEN ? AND ?`;
+    return {
+      ...(first?.d ? { firstDay: String(first.d) } : {}),
+      total: this.db.prepare(`SELECT ${SUMS} FROM usage ${range}`).get(from, to) as Row,
+      days: this.db.prepare(`SELECT day, ${SUMS} FROM usage ${range} GROUP BY day ORDER BY day`).all(from, to) as Row[],
+      models: this.db.prepare(`SELECT engine, model, ${SUMS} FROM usage ${range} GROUP BY engine, model ORDER BY (SUM(input) + SUM(output) + SUM(cache_write)) DESC`).all(from, to) as Row[],
+      sessions: this.db
+        .prepare(`SELECT session_id, MAX(engine) AS engine, ${SUMS} FROM usage ${range} GROUP BY session_id ORDER BY (SUM(input) + SUM(output) + SUM(cache_write)) DESC LIMIT 50`)
+        .all(from, to) as Row[],
+    };
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
+  // ---------- sessions ----------
+
+  insertSession(s: SessionRow): void {
+    this.db
+      .prepare(
+        `INSERT INTO sessions (id, engine, engine_session_id, directory, title, model_json, permission_mode, status, created_at, updated_at, last_seq, worktree_json, group_id, task_id, effort, kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(s.id, s.engine, s.engineSessionId, s.directory, s.title, JSON.stringify(s.model), s.permissionMode, s.status, s.createdAt, s.updatedAt, s.lastSeq, s.worktree ? JSON.stringify(s.worktree) : null, s.groupId || null, s.taskId || null, s.effort || null, s.kind || null);
+  }
+
+  updateSession(id: string, patch: Partial<Pick<SessionInfo, "engine" | "title" | "status" | "model" | "permissionMode" | "updatedAt" | "resumeAt" | "groupId" | "autoCheck" | "effort">>): void {
+    const sets: string[] = [];
+    const vals: (string | number)[] = [];
+    if (patch.engine !== undefined) sets.push("engine = ?"), vals.push(patch.engine);
+    if (patch.title !== undefined) sets.push("title = ?"), vals.push(patch.title);
+    if (patch.permissionMode !== undefined) sets.push("permission_mode = ?"), vals.push(patch.permissionMode);
+    if (patch.status !== undefined) sets.push("status = ?"), vals.push(patch.status);
+    if (patch.model !== undefined) sets.push("model_json = ?"), vals.push(JSON.stringify(patch.model));
+    if (patch.updatedAt !== undefined) sets.push("updated_at = ?"), vals.push(patch.updatedAt);
+    if (patch.resumeAt !== undefined) sets.push("resume_at = ?"), vals.push(patch.resumeAt);
+    // "" — убрать из группы
+    if (patch.groupId !== undefined) sets.push("group_id = ?"), vals.push(patch.groupId || (null as unknown as string));
+    if (patch.autoCheck !== undefined) sets.push("auto_check = ?"), vals.push(patch.autoCheck ? 1 : 0);
+    // "" — по умолчанию модели
+    if (patch.effort !== undefined) sets.push("effort = ?"), vals.push(patch.effort || (null as unknown as string));
+    if (!sets.length) return;
+    this.db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`).run(...vals, id);
+  }
+
+  /** Диспетчер перешёл на другой движок: журнал тот же, сессия движка другая. */
+  setEngineSession(id: string, engineSessionId: string): void {
+    this.db.prepare(`UPDATE sessions SET engine_session_id = ? WHERE id = ?`).run(engineSessionId, id);
+  }
+
+  getSession(id: string): SessionRow | undefined {
+    const r = this.db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(id) as Row | undefined;
+    return r ? toSession(r) : undefined;
+  }
+
+  listSessions(): SessionRow[] {
+    return (this.db.prepare(`SELECT * FROM sessions ORDER BY updated_at DESC`).all() as Row[]).map(toSession);
+  }
+
+  // ---------- группы сессий ----------
+
+  // ---------- tasks ----------
+
+  listTasks(): TaskInfo[] {
+    return (this.db.prepare(`SELECT json FROM tasks ORDER BY created_at DESC`).all() as Row[]).map((r) => JSON.parse(String(r.json)) as TaskInfo);
+  }
+
+  getTask(id: string): TaskInfo | undefined {
+    const r = this.db.prepare(`SELECT json FROM tasks WHERE id = ?`).get(id) as Row | undefined;
+    return r ? (JSON.parse(String(r.json)) as TaskInfo) : undefined;
+  }
+
+  saveTask(t: TaskInfo): void {
+    this.db.prepare(`INSERT INTO tasks (id, created_at, json) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json`).run(t.id, t.createdAt, JSON.stringify(t));
+  }
+
+  deleteTask(id: string): void {
+    this.db.prepare(`DELETE FROM tasks WHERE id = ?`).run(id);
+  }
+
+  listGroups(): SessionGroup[] {
+    return (this.db.prepare(`SELECT * FROM groups ORDER BY sort, name`).all() as Row[]).map((r) => ({
+      id: String(r.id),
+      name: String(r.name),
+      ...(r.icon ? { icon: String(r.icon) } : {}),
+      ...(r.prompt ? { prompt: String(r.prompt) } : {}),
+      ...(r.no_user_rules ? { noUserRules: true } : {}),
+      sort: Number(r.sort),
+    }));
+  }
+
+  getGroup(id: string): SessionGroup | undefined {
+    return this.listGroups().find((g) => g.id === id);
+  }
+
+  saveGroup(g: SessionGroup): void {
+    this.db
+      .prepare(
+        `INSERT INTO groups (id, name, icon, prompt, sort, no_user_rules) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, icon = excluded.icon, prompt = excluded.prompt, sort = excluded.sort, no_user_rules = excluded.no_user_rules`,
+      )
+      .run(g.id, g.name, g.icon ?? null, g.prompt ?? null, g.sort, g.noUserRules ? 1 : 0);
+  }
+
+  /** сессии группы остаются, но без группы */
+  deleteGroup(id: string): string[] {
+    const ids = (this.db.prepare(`SELECT id FROM sessions WHERE group_id = ?`).all(id) as Row[]).map((r) => String(r.id));
+    this.db.prepare(`UPDATE sessions SET group_id = NULL WHERE group_id = ?`).run(id);
+    this.db.prepare(`DELETE FROM groups WHERE id = ?`).run(id);
+    return ids;
+  }
+
+  deleteSession(id: string): void {
+    this.db.prepare(`DELETE FROM events WHERE session_id = ?`).run(id);
+    this.dropSearch(id);
+    this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
+  }
+
+  // ---------- events ----------
+
+  /** Атомарно выдаёт следующий seq сессии и сохраняет событие. */
+  appendEvent(sessionId: string, event: SessionEvent, ts = Date.now()): StoredEvent {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const r = this.db.prepare(`SELECT last_seq FROM sessions WHERE id = ?`).get(sessionId) as Row | undefined;
+      if (!r) throw new Error(L(`Нет сессии ${sessionId}`, `No session ${sessionId}`));
+      const seq = Number(r.last_seq) + 1;
+      this.db.prepare(`INSERT INTO events (session_id, seq, ts, event_json) VALUES (?, ?, ?, ?)`).run(sessionId, seq, ts, JSON.stringify(event));
+      this.db.prepare(`UPDATE sessions SET last_seq = ?, updated_at = ? WHERE id = ?`).run(seq, ts, sessionId);
+      this.db.exec("COMMIT");
+      return { seq, sessionId, ts, event };
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  eventsAfter(sessionId: string, after: number): StoredEvent[] {
+    const rows = this.db
+      .prepare(`SELECT seq, ts, event_json FROM events WHERE session_id = ? AND seq > ? ORDER BY seq`)
+      .all(sessionId, after) as Row[];
+    return rows.map((r) => ({ seq: Number(r.seq), sessionId, ts: Number(r.ts), event: JSON.parse(String(r.event_json)) as SessionEvent }));
+  }
+
+  // ---------- devices ----------
+
+  insertDevice(d: DeviceRow): void {
+    this.db
+      .prepare(`INSERT INTO devices (id, name, token_hash, created_at, last_seen, fcm_token) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(d.id, d.name, d.tokenHash, d.createdAt, d.lastSeen, d.fcmToken);
+  }
+
+  deviceByTokenHash(hash: string): DeviceRow | undefined {
+    const r = this.db.prepare(`SELECT * FROM devices WHERE token_hash = ?`).get(hash) as Row | undefined;
+    return r ? toDevice(r) : undefined;
+  }
+
+  listDevices(): DeviceRow[] {
+    return (this.db.prepare(`SELECT * FROM devices ORDER BY created_at`).all() as Row[]).map(toDevice);
+  }
+
+  touchDevice(id: string, ts = Date.now()): void {
+    this.db.prepare(`UPDATE devices SET last_seen = ? WHERE id = ?`).run(ts, id);
+  }
+
+  setFcmToken(id: string, token: string | null): void {
+    this.db.prepare(`UPDATE devices SET fcm_token = ? WHERE id = ?`).run(token, id);
+  }
+
+  deleteDevice(id: string): void {
+    this.db.prepare(`DELETE FROM devices WHERE id = ?`).run(id);
+  }
+
+  // ---------- files ----------
+
+  insertFile(f: FileRow): void {
+    this.db
+      .prepare(`INSERT INTO files (id, session_id, direction, name, mime, size, path, sha256, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(f.id, f.sessionId, f.direction, f.name, f.mime, f.size, f.path, f.sha256, f.createdAt);
+  }
+
+  getFile(id: string): FileRow | undefined {
+    const r = this.db.prepare(`SELECT * FROM files WHERE id = ?`).get(id) as Row | undefined;
+    return r ? toFile(r) : undefined;
+  }
+
+  fileByPath(path: string): FileRow | undefined {
+    const r = this.db.prepare(`SELECT * FROM files WHERE lower(path) = lower(?) ORDER BY created_at DESC LIMIT 1`).get(path) as Row | undefined;
+    return r ? toFile(r) : undefined;
+  }
+}
+
+function toFile(r: Row): FileRow {
+    return {
+      id: String(r.id),
+      sessionId: r.session_id == null ? null : String(r.session_id),
+      direction: String(r.direction) as FileRow["direction"],
+      name: String(r.name),
+      mime: String(r.mime),
+      size: Number(r.size),
+      path: String(r.path),
+      sha256: String(r.sha256),
+      createdAt: Number(r.created_at),
+    };
+}
+
+function toSession(r: Row): SessionRow {
+  return {
+    id: String(r.id),
+    engine: String(r.engine) as EngineId,
+    engineSessionId: String(r.engine_session_id),
+    directory: String(r.directory),
+    title: String(r.title),
+    model: JSON.parse(String(r.model_json)) as ModelRef,
+    permissionMode: String(r.permission_mode) as PermissionMode,
+    status: String(r.status) as SessionStatus,
+    createdAt: Number(r.created_at),
+    updatedAt: Number(r.updated_at),
+    lastSeq: Number(r.last_seq),
+    ...(Number(r.resume_at) > 0 ? { resumeAt: Number(r.resume_at) } : {}),
+    ...(r.worktree_json ? { worktree: JSON.parse(String(r.worktree_json)) as WorktreeInfo } : {}),
+    ...(r.group_id ? { groupId: String(r.group_id) } : {}),
+    ...(r.task_id ? { taskId: String(r.task_id) } : {}),
+    ...(r.kind === "dispatcher" ? { kind: "dispatcher" as const } : {}),
+    ...(Number(r.auto_check) ? { autoCheck: true } : {}),
+    ...(r.effort ? { effort: String(r.effort) } : {}),
+  };
+}
+
+function toDevice(r: Row): DeviceRow {
+  return {
+    id: String(r.id),
+    name: String(r.name),
+    tokenHash: String(r.token_hash),
+    createdAt: Number(r.created_at),
+    lastSeen: Number(r.last_seen),
+    fcmToken: r.fcm_token == null ? null : String(r.fcm_token),
+  };
+}
+
+export function publicSession(s: SessionRow): SessionInfo {
+  const { engineSessionId: _, ...info } = s;
+  return info;
+}

@@ -1,0 +1,22 @@
+{
+ "note": "вход AskUserQuestion из реального потока claude 2.1.302 (Haiku)",
+ "input": {
+  "questions": [
+   {
+    "question": "Какой цвет ты предпочитаешь?",
+    "header": "Цвет",
+    "multiSelect": false,
+    "options": [
+     {
+      "label": "Красный",
+      "description": "Выбрать красный цвет"
+     },
+     {
+      "label": "Синий",
+      "description": "Выбрать синий цвет"
+     }
+    ]
+   }
+  ]
+ }
+}

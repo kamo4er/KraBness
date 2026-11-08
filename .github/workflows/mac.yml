@@ -1,0 +1,29 @@
+# KraBness on a real Mac (Apple Silicon): typecheck, unit tests, then a clean install with install.sh,
+# the hub under launchd, restart and update from the UI. Runs on the mac-ci branch while macOS support is in beta.
+name: mac
+
+on:
+  push:
+    branches: [mac-ci]
+  workflow_dispatch:
+
+jobs:
+  mac:
+    if: github.repository == 'kamo4er/KraBness'
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      # tests create git repositories and commit in them
+      - run: |
+          git config --global user.name "KraBness CI"
+          git config --global user.email "ci@example.com"
+          git config --global init.defaultBranch main
+      - run: sw_vers && uname -m && echo "SHELL=$SHELL" && echo "PATH=$PATH"
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test

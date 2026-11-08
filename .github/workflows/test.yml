@@ -1,0 +1,33 @@
+# Typecheck and unit tests on a clean Windows machine for every push to the public KraBness repository.
+# The private working repository skips the job (it would only burn Actions minutes there).
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    if: github.repository == 'kamo4er/KraBness'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      # tests create git repositories and commit in them
+      - run: |
+          git config --global user.name "KraBness CI"
+          git config --global user.email "ci@example.com"
+          git config --global init.defaultBranch main
+      - run: npm ci
+      - run: npm run typecheck
+      # the runner's TEMP is in 8.3 form (C:\Users\RUNNER~1), git answers with long paths; runner.temp is long
+      - run: npm test
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}

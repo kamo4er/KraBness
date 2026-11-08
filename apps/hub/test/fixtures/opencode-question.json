@@ -1,0 +1,46 @@
+{
+ "sid": "ses_eaff0d63dffeQxEVhqNKW2w4DX",
+ "events": [
+  {
+   "id": "evt_1500f3605001dscvTYQvLqp5ms",
+   "type": "question.asked",
+   "properties": {
+    "id": "que_1500f3604001Eiex4k0HzVWI5w",
+    "sessionID": "ses_eaff0d63dffeQxEVhqNKW2w4DX",
+    "questions": [
+     {
+      "question": "Какой цвет вы предпочитаете — красный или синий?",
+      "header": "Предпочтение цвета",
+      "options": [
+       {
+        "label": "Красный",
+        "description": "Выбрать красный цвет"
+       },
+       {
+        "label": "Синий",
+        "description": "Выбрать синий цвет"
+       }
+      ]
+     }
+    ],
+    "tool": {
+     "messageID": "msg_1500f2bbd001mMPJADv9UBbXPo",
+     "callID": "call_00_v96gfmcnu77ibtppa89gm4s0"
+    }
+   }
+  },
+  {
+   "id": "evt_1500f36d9001T38Vwr2qT4ehKY",
+   "type": "question.replied",
+   "properties": {
+    "sessionID": "ses_eaff0d63dffeQxEVhqNKW2w4DX",
+    "requestID": "que_1500f3604001Eiex4k0HzVWI5w",
+    "answers": [
+     [
+      "Синий"
+     ]
+    ]
+   }
+  }
+ ]
+}

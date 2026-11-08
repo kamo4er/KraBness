@@ -1,0 +1,19 @@
+[project]
+name = "krabness-voice"
+version = "0.1.0"
+description = "KraBness: голос на ПК — слово-активатор, распознавание речи (Whisper на видеокарте), озвучка ответов Диспетчера"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "faster-whisper>=1.2",
+  "nvidia-cublas-cu12",
+  "nvidia-cudnn-cu12>=9,<10",
+  "openwakeword>=0.6",
+  "onnxruntime>=1.20",
+  "piper-tts>=1.3",
+  "sounddevice>=0.5",
+  "numpy",
+]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'win32'"]
