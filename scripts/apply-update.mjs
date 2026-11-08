@@ -101,7 +101,7 @@ function apply() {
     for (const e of entries) move(join(stage, e), join(root, e));
     for (const pth of PRESERVE) if (existsSync(join(backup, pth)) && !existsSync(join(root, pth))) move(join(backup, pth), join(root, pth));
     // выпуск собирается на Windows: в zip нет бита исполнения, а krabness и сценарии на маке запускают напрямую
-    if (process.platform !== "win32") {
+    if (process.platform !== "win32" && existsSync(join(root, "scripts"))) {
       for (const f of ["scripts/krabness", ...readdirSync(join(root, "scripts")).filter((x) => x.endsWith(".sh")).map((x) => `scripts/${x}`)]) {
         if (existsSync(join(root, f))) chmodSync(join(root, f), 0o755);
       }
