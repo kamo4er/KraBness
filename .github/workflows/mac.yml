@@ -27,31 +27,35 @@ jobs:
       - run: npm run typecheck
       # TMPDIR of a Mac is /var/folders/..., a symlink to /private/var: the hub stores real paths, tests compare
       # with tmpdir(). runner.temp has no symlinks (same trick as TEMP on the Windows runner)
-      # --test-timeout: a hung test fails with its name instead of hanging the whole job
-      - run: |
-          npm test -w @kamharn/protocol
-          cd apps/hub && node --env-file=test/unit/test.env --import tsx --test --test-timeout=120000 test/unit/*.test.ts
-        timeout-minutes: 20
+      - run: npm test -w @kamharn/protocol
+      # file by file with a time limit each: a file that hangs is named instead of hanging the whole job
+      - run: node scripts/ci/test-files.mjs --parallel 3 --timeout 240
+        timeout-minutes: 25
         env:
           TMPDIR: ${{ runner.temp }}
 
   install:
     if: github.repository == 'kamo4er/KraBness'
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - run: sw_vers && uname -m && echo "SHELL=$SHELL" && echo "PATH=$PATH"
       # a clean install like a person does it: release zip of this commit, no questions, the hub under launchd
+      # release zips of this commit signed with a throwaway key: the base one to install, a newer one and a crashing one
+      - run: node scripts/ci/mac-update.mjs prepare "$RUNNER_TEMP/e2e"
       - name: install.sh from scratch
         run: |
-          git archive --format=zip -o "$RUNNER_TEMP/krabness.zip" HEAD
-          KRABNESS_DIR="$HOME/KraBness" KRABNESS_ZIP="$RUNNER_TEMP/krabness.zip" KRABNESS_OPENCODE=0 KRABNESS_CLAUDE=0 \
+          base="$(cat "$RUNNER_TEMP/e2e/base.txt")"
+          KRABNESS_DIR="$HOME/KraBness" KRABNESS_ZIP="$RUNNER_TEMP/e2e/krabness-$base.zip" KRABNESS_OPENCODE=1 KRABNESS_CLAUDE=1 \
             KRABNESS_AUTOSTART=1 KRABNESS_OPEN=0 bash scripts/install.sh
         timeout-minutes: 15
       - name: hub runs under launchd and restarts
         run: bash scripts/ci/mac-smoke.sh "$HOME/KraBness"
         timeout-minutes: 10
+      - name: update from the UI, rollback of a crashing release
+        run: node scripts/ci/mac-update.mjs run "$RUNNER_TEMP/e2e" "$HOME/KraBness"
+        timeout-minutes: 30
       - name: collect logs
         if: always()
         run: |

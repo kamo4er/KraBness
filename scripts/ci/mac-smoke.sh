@@ -17,6 +17,12 @@ check "platform is darwin" '[ "$(json /api/hub j.platform)" = darwin ]'
 check "can sleep (pmset)" '[ "$(json /api/hub j.canSleep)" = true ]'
 check "autostart plist in LaunchAgents" '[ -f "$HOME/Library/LaunchAgents/dev.krabness.hub.plist" ]'
 check "launchd agent loaded" 'launchctl print "gui/$(id -u)/dev.krabness.hub" >/dev/null'
+# the agents the installer put next to its Node are found by the hub under launchd's bare PATH
+engine() { json /api/engines "j.find(e=>e.id==='$1')?.$2"; }
+claude_found() { for _ in $(seq 1 30); do [ "$(engine claude auth?.installed)" = true ] && return 0; sleep 2; done; return 1; }
+opencode_up() { for _ in $(seq 1 60); do [ "$(engine opencode available)" = true ] && return 0; sleep 2; done; return 1; }
+check "Claude Code CLI found by the hub" claude_found
+check "opencode started by the hub" opencode_up
 
 # restart from the UI: the hub exits with 75, the supervisor starts it again with a new startedAt
 before="$(json /api/hub j.startedAt)"
