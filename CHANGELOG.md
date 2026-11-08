@@ -2,6 +2,29 @@
 
 What changed from release to release. Downloads are on the [releases](https://github.com/kamo4er/KraBness/releases) page.
 
+## 0.1.59
+
+**A team of agents for tasks: an analyst writes the spec with you, a designer draws a clickable prototype, an architect reviews it, a developer builds it and a tester checks it against the criteria. Also new folders right from the folder picker, a git repository for a task in one tap and setting up your own server by address, login and password.**
+
+### Tasks: a team of agents
+- A new task can be done by one agent, as before, or by a team. The team goes analyst → designer → architect → your approval → developer → tester → your decision.
+- The analyst asks you questions in the chat and writes the spec: the goal, what's in and out, and 3 to 8 acceptance criteria about behavior. The spec lives in the task copy (`.kamharn/spec.md`) and never gets into a commit.
+- The designer joins when the task has a user interface (the analyst marks it; you can also turn the designer on always or off). It writes the "Interface" section with 2 to 5 UI criteria and makes a clickable prototype. You see the prototype as a live page on the approval screen, on the PC and on the phone.
+- The architect approves the spec or sends remarks back to the analyst, up to 2 rounds.
+- You approve the spec, edit it by hand or send it back to the analyst with a comment. Only then does the developer start, in a separate copy of the project, building the interface from the prototype.
+- The tester checks every criterion, adds missing tests and returns bugs to the developer, up to 3 rounds. The report shows what passed and what didn't.
+- Every role can run on its own model. By default the analyst and the architect use the developer's model and the tester uses opencode, if it's there, so that a different model checks the work.
+- A task waiting for your answer or approval is counted in the "waiting for your answer" counter, and you get a notification.
+
+### Folders
+- "+ Folder" in the web folder picker and "+" in the app create a new folder right there. In tasks it's created as a git repository with a first commit, because a task needs its own branch.
+- A task on a folder without git no longer just fails: under the error there is "Make the folder a git repository and start". The files already in the folder go into the first commit. An existing `.git`, even a broken one, is never touched.
+
+### Your own server in one go
+- Settings → Connection → Remote access → "Set up the server": enter the address, the login and the password (or a key). The hub connects over SSH once, runs its own setup script as root or through sudo, saves the address, brings up the tunnel and checks it from outside. The log is shown step by step.
+- The password is used only for this setup: it isn't saved and doesn't go into the log. After that the hub uses its own key, which may only open the tunnel.
+- The manual command is still there under "Or by hand".
+
 ## 0.1.58
 
 **A fix release: in the 0.1.57 app, agent replies froze mid-word until you reopened the session, and a live page that arrived in an open chat could stay paused. Also a header that fits narrow phones, fixes for sessions in a separate branch and a new README GIF.**

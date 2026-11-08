@@ -77,5 +77,11 @@ const flat = (s: string) => s.trim().replace(/\s+/g, " ").replace(/\.$/, "");
 /** Цель задачи не уместилась в заголовок (он — её первое предложение или обрезка): показать её отдельно. */
 export const goalBeyondTitle = (task: { goal: string; title: string }): boolean => flat(task.goal) !== flat(task.title);
 
+/** Спецификация для чтения: без служебной первой строки «UI: да/нет» (её аналитик ставит для хаба). */
+export const specForReading = (spec: string): string => spec.replace(/^\s*UI:[^\n]*\n+/i, "");
+
 /** Значок файла в отчёте по статусу git: A и ?? — новый, D — удалён, остальное — изменён. */
 export const fileKind = (status: string): "new" | "del" | "mod" => (/^(A|\?\?)/.test(status) ? "new" : status.includes("D") ? "del" : "mod");
+
+/** Задача не стартовала: выбранная папка не git-репозиторий (тогда форма предлагает сделать его). */
+export const notRepoError = (message: string): boolean => /не в git-репозитории|isn't a git repository/i.test(message);

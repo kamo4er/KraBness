@@ -8,7 +8,7 @@ import { basename, join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { randomBytes } from "node:crypto";
 import { MAX_FILE_BYTES, type FileStore } from "./files.ts";
-import { gitInfo, mimeOf, readFileView, writeTextFile } from "./project.ts";
+import { gitInfo, makeFolder, makeRepo, mimeOf, readFileView, writeTextFile } from "./project.ts";
 import { searchFiles } from "./filesearch.ts";
 import type {
   AppRelease,
@@ -30,6 +30,7 @@ import type {
   CreateTaskRequest,
   TaskAction,
   TaskInfo,
+  ProvisionRequest,
   RemoteSettings,
   McpServer,
   EngineId,
@@ -114,7 +115,7 @@ export interface ServerDeps {
   /** вход в Claude Code: статус, свой API-ключ, окно входа на ПК */
   claudeLogin?: ClaudeLogin;
   /** удалённый доступ через свой VPS (SSH-туннель) */
-  remote?: Pick<RemoteTunnel, "status" | "save" | "remove" | "test">;
+  remote?: Pick<RemoteTunnel, "status" | "save" | "remove" | "test" | "startProvision" | "provisionStatus">;
   /** усыпить ПК через delayMs; undefined — не умеем (тесты, не Windows) */
   sleep?: { schedule(delayMs: number): void };
 }
@@ -317,6 +318,9 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   app.put<{ Body: Partial<RemoteSettings> }>("/api/remote", async (req) => remote().save(req.body ?? {}));
   app.delete("/api/remote", async () => remote().remove());
   app.post("/api/remote/test", async () => remote().test());
+  // настроить сервер самому: пароль или ключ только в этом запросе (не сохраняется, в журнал не идёт), дальше — фоном
+  app.post<{ Body: Partial<ProvisionRequest> }>("/api/remote/provision", async (req) => remote().startProvision(req.body ?? {}));
+  app.get("/api/remote/provision", async () => remote().provisionStatus());
   // адреса хаба: все известные (в QR) и свои за прокси (NAS, роутер с белым IP)
   app.get("/api/addresses", async () => ({ urls: deps.urls(), publicUrls: config.config.publicUrls ?? [], previewUrl: config.config.previewUrl ?? "" }));
   // общий адрес превью за своим прокси (NAS): своё имя, направленное на порт хаба; "" — убрать
@@ -654,6 +658,30 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
         return { name: d.name, path, dir: d.isDirectory(), ...(size !== undefined ? { size } : {}) };
       })
       .sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name));
+  });
+
+  // новая папка прямо из выбора папки (git — сразу репозиторий с первым коммитом: задаче нужна своя ветка)
+  app.post<{ Body: { parent?: string; name?: unknown; git?: unknown } }>("/api/fs/mkdir", async (req) => {
+    let parent: string;
+    try {
+      parent = config.resolveAllowed(String(req.body?.parent ?? ""));
+    } catch (e) {
+      throw new HttpError(403, (e as Error).message);
+    }
+    if (!statSync(parent).isDirectory()) throw new HttpError(400, L("Это не папка", "Not a folder"));
+    return makeFolder(parent, req.body?.name, req.body?.git === true);
+  });
+
+  // существующую папку — в git-репозиторий с первым коммитом (задача упёрлась в «папка не в git»)
+  app.post<{ Body: { path?: string } }>("/api/fs/git-init", async (req) => {
+    let path: string;
+    try {
+      path = config.resolveAllowed(String(req.body?.path ?? ""));
+    } catch (e) {
+      throw new HttpError(403, (e as Error).message);
+    }
+    if (!statSync(path).isDirectory()) throw new HttpError(400, L("Это не папка", "Not a folder"));
+    return makeRepo(path);
   });
 
   // ---------- просмотр проекта: файлы и git (без агента) ----------

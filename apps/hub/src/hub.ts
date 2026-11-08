@@ -91,7 +91,7 @@ export interface HubOptions {
   /** вход в Claude: тесты подставляют свой адрес Anthropic API и заглушку окна входа */
   claudeLogin?: { api?: string; openTerminal?: (bin: string) => void };
   /** удалённый доступ через VPS: тесты подставляют свой ssh */
-  remote?: { sshBin?: string; sshPrefix?: string[]; upAfterMs?: number };
+  remote?: { sshBin?: string; sshPrefix?: string[]; upAfterMs?: number; provisionChecks?: number; provisionPauseMs?: number };
 }
 
 export async function createHub(opts: HubOptions = {}): Promise<Hub> {

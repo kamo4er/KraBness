@@ -99,6 +99,7 @@ The hub merges nothing into the main branch without your decision. Failed checks
 
 - **Queue.** Tasks start as slots free up (two at once by default), or at night: "Start at night" waits until 02:00.
 - **Any engine.** Pick the models for the work and for the review. By default the work goes to Claude if you're signed in, the review to opencode.
+- **A team instead of one agent.** Pick "A team" in a new task and you act as the product owner. An analyst asks you questions in its chat and writes a specification (goal, scope, numbered acceptance criteria). If the task changes the interface, a designer adds the screens and states and makes a clickable prototype you can try right in the task. An architect checks it against the code and adds how to build it, or sends it back (up to two rounds). You approve it, edit it by hand or send it back with a comment. Then a developer builds it in the project copy and a tester, by default on another model, turns the criteria into tests and sends bugs back (up to three rounds). The specification stays in the task and never lands in the commit. It takes longer than one agent, but a misunderstanding is caught before any code is written.
 - **Auto-check in any session.** ⋯ → Auto-check in the chat header turns on checks after each agent turn. A red check goes to the agent, up to three attempts, and stops early if the same error comes back.
 - **Hit a Claude limit?** The session waits for the reset and continues by itself. "Don't wait" hands the work over to an opencode model.
 

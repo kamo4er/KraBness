@@ -450,6 +450,34 @@ export interface RemoteStatus {
   since: number;
 }
 
+/** Настроить сервер из интерфейса: хаб один раз заходит по SSH (пароль или ключ не сохраняются) и ставит всё сам. */
+export interface ProvisionRequest {
+  host: string;
+  sshPort?: number;
+  /** root или пользователь с sudo */
+  user: string;
+  password?: string;
+  /** закрытый ключ OpenSSH/PEM — вместо пароля */
+  privateKey?: string;
+}
+
+/** Ход настройки сервера (GET /api/remote/provision): идёт в фоне — на свежем сервере пара минут. */
+export interface ProvisionStatus {
+  running: boolean;
+  log: string[];
+  error?: string;
+  /** сервер настроен: что напечатал скрипт, отпечаток ключа сервера и проверка снаружи через туннель */
+  done?: {
+    host: string;
+    user: string;
+    url: string;
+    hostKey: string;
+    reachable: boolean;
+    ms?: number;
+    note?: string;
+  };
+}
+
 /** Прокси до api.telegram.org — там, где Telegram заблокирован (свой VPS с SOCKS5 или HTTP-прокси). */
 export interface TelegramProxy {
   type: "socks5" | "http";
@@ -694,11 +722,31 @@ export * from "./i18n.ts";
 /**
  * queued — ждёт очереди или назначенного времени; running — идёт шаг; waiting_limit — исполнитель упёрся в лимит Claude и ждёт сброса;
  * ready — готово, ждёт решения (влить / ещё круг / выбросить); merged / discarded — решено; failed — сломалось.
+ * approval — только у команды: спецификация готова и ждёт одобрения (одобрить / править / выбросить).
  */
-export type TaskStatus = "queued" | "running" | "waiting_limit" | "ready" | "merged" | "discarded" | "failed";
+export type TaskStatus = "queued" | "running" | "waiting_limit" | "approval" | "ready" | "merged" | "discarded" | "failed";
 
-/** work — исполнитель делает; checks — автопроверка; review — ревью другой моделью; fix — исполнитель правит по ревью или по просьбе */
-export type TaskStepKind = "work" | "checks" | "review" | "fix";
+/**
+ * work — исполнитель делает; checks — автопроверка; review — ревью другой моделью; fix — исполнитель правит по ревью или по просьбе;
+ * у команды ещё: analysis — аналитик пишет спецификацию; ux — дизайнер рисует интерфейс и прототип; design — архитектор проверяет;
+ * test — тестировщик проверяет работу
+ */
+export type TaskStepKind = "work" | "checks" | "review" | "fix" | "analysis" | "ux" | "design" | "test";
+
+/** Роли команды кроме разработчика (он — исполнитель задачи). */
+export type TeamRole = "analyst" | "designer" | "architect" | "tester";
+export const TEAM_ROLES: TeamRole[] = ["analyst", "designer", "architect", "tester"];
+
+/** Этап задачи команды, пока она running: кто сейчас работает. */
+export type TeamStage = "analysis" | "ux" | "design" | "dev" | "testing";
+
+export interface TeamMember {
+  engine: EngineId;
+  model?: ModelRef;
+  effort?: string;
+  /** сессия роли (создаётся, когда до неё дошло, и переиспользуется между кругами) */
+  sessionId?: string;
+}
 
 export interface TaskStep {
   kind: TaskStepKind;
@@ -723,6 +771,10 @@ export interface TaskReport {
   reviewText?: string;
   /** коммит в основной ветке после «Влить» */
   commit?: string;
+  /** команда: passed — тестировщик всё принял; bugs — круги кончились, баги остались; skipped — тестировщика не было */
+  test?: "passed" | "bugs" | "skipped";
+  /** последний отчёт тестировщика целиком */
+  testText?: string;
 }
 
 export interface TaskInfo {
@@ -763,8 +815,30 @@ export interface TaskInfo {
   reviews: number;
   report?: TaskReport;
   error?: string;
-  /** агент задачи ждёт человека: подтверждение или вопрос (иначе задача молча стоит) */
-  asking?: { sessionId: string; kind: "permission" | "question"; text: string; at: number };
+  /** агент задачи ждёт человека: подтверждение, вопрос или (у аналитика команды) ответ в чате — иначе задача молча стоит */
+  asking?: { sessionId: string; kind: "permission" | "question" | "reply"; text: string; at: number };
+  /** «team» — команда: аналитик → архитектор → одобрение → разработчик → тестировщик; нет — простая задача */
+  mode?: "team";
+  /** команда: кто сейчас работает (пока status running) */
+  stage?: TeamStage;
+  /** команда: аналитик, архитектор, тестировщик (разработчик — workerEngine/workerModel); тестировщика нет — без него */
+  team?: Partial<Record<TeamRole, TeamMember>>;
+  /** команда: спецификация (markdown) — последняя, что сдал аналитик и дополнили дизайнер и архитектор */
+  spec?: string;
+  /** команда: дизайнер — «auto» (если аналитик отметил UI: да) или «on» (всегда); нет — без дизайнера */
+  designerMode?: "auto" | "on";
+  /** команда: аналитик отметил, что задача меняет интерфейс (первая строка спецификации «UI: да/нет») */
+  ui?: boolean;
+  /** команда: кликабельный прототип дизайнера (самодостаточный HTML) */
+  prototype?: string;
+  /** команда: круги «архитектор вернул замечания» с последней правки пользователя */
+  designRounds?: number;
+  /** команда: последние замечания архитектора, если круги кончились без одобрения (решает пользователь) */
+  designRemarks?: string;
+  /** команда: круги тестировщика */
+  testRounds?: number;
+  testVerdict?: "passed" | "bugs";
+  testText?: string;
 }
 
 export interface CreateTaskRequest {
@@ -783,10 +857,24 @@ export interface CreateTaskRequest {
   reviewModel?: ModelRef | null;
   /** запустить не раньше этого времени (мс) — например, ночью */
   startAt?: number;
+  /** «team» — задача для команды (workerEngine/workerModel — разработчик) */
+  mode?: "team";
+  /** дизайнер команды: auto — если аналитик отметит, что задача про интерфейс (по умолчанию); on — всегда; off — без него */
+  designer?: "auto" | "on" | "off";
+  /** модели ролей команды; не заданы — умолчания; tester: null — без тестировщика */
+  team?: Partial<Record<TeamRole, { engine?: EngineId; model?: ModelRef; effort?: string } | null>>;
 }
 
-/** «Влить» в основную ветку, «Ещё круг» с комментарием, «Выбросить» изменения */
-export type TaskAction = { action: "merge" } | { action: "more"; comment: string } | { action: "discard" };
+/**
+ * «Влить» в основную ветку, «Ещё круг» с комментарием, «Выбросить» изменения;
+ * у команды в approval: «Одобрить» (spec — спецификация, поправленная руками) и «Править» (комментарий аналитику)
+ */
+export type TaskAction =
+  | { action: "merge" }
+  | { action: "more"; comment: string }
+  | { action: "discard" }
+  | { action: "approve"; spec?: string }
+  | { action: "revise"; comment: string };
 
 /** Расход токенов. tokens — новые токены (ввод + вывод + запись в кэш); чтение из кэша — отдельно. cost — $ как по API. */
 export interface UsageTotals {

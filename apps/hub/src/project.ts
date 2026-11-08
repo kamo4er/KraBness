@@ -1,8 +1,8 @@
 // Просмотр проекта без агента: чтение файлов и git-изменения в папке сессии (бесплатно по лимитам).
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
-import { extname } from "node:path";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { extname, join } from "node:path";
 import type { FileView, GitInfo } from "@kamharn/protocol";
 import { HttpError } from "./sessions.ts";
 import { L } from "./lang.ts";
@@ -65,10 +65,11 @@ export function writeTextFile(path: string, text: string, base: string | undefin
   return readFileView(path, max);
 }
 
-function git(cwd: string, args: string[]): Promise<string> {
+function git(cwd: string, args: string[], timeout = 15_000): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("git", ["-c", "core.quotepath=off", ...args], { cwd, timeout: 15_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (err, stdout) =>
-      err ? reject(err) : resolve(stdout),
+    execFile("git", ["-c", "core.quotepath=off", ...args], { cwd, timeout, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) =>
+      // первая строка stderr — в ошибку: «dubious ownership», «not a git repository» и т. п. человеку понятнее кода выхода
+      err ? reject(Object.assign(err, { message: (String(stderr).trim().split("\n")[0] || err.message).slice(0, 300) })) : resolve(stdout),
     );
   });
 }
@@ -95,3 +96,64 @@ export async function gitInfo(dir: string, maxDiff = 400 * 1024): Promise<GitInf
   const truncated = diff.length > maxDiff;
   return { repo: true, ...(branch ? { branch } : {}), files, diff: truncated ? diff.slice(0, maxDiff) : diff, truncated };
 }
+
+// имя новой папки: без разделителей и запрещённых в Windows знаков, не «.»/«..», не CON/NUL/COM1…, без точки или пробела в конце
+const BAD_NAME = /[<>:"/\\|?*\u0000-\u001f]/;
+const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i;
+
+/**
+ * Новая папка внутри разрешённой (parent уже проверен через resolveAllowed). withGit — сразу git-репозиторий с пустым
+ * первым коммитом: задаче нужна своя ветка, а ветку от репозитория без коммитов не сделать.
+ */
+export async function makeFolder(parent: string, raw: unknown, withGit: boolean): Promise<{ path: string }> {
+  const name = String(raw ?? "").trim();
+  if (!name || name.length > 100 || BAD_NAME.test(name) || RESERVED.test(name) || /^\.+$/.test(name) || /[. ]$/.test(name))
+    throw new HttpError(400, L("Недопустимое имя папки: без \\ / : * ? \" < > |, не длиннее 100 знаков", "Invalid folder name: no \\ / : * ? \" < > |, at most 100 characters"));
+  const path = join(parent, name);
+  if (existsSync(path)) throw new HttpError(409, L("Такая папка уже есть", "This folder already exists"));
+  mkdirSync(path);
+  if (!withGit) return { path };
+  try {
+    await initRepo(path);
+  } catch (e) {
+    rmSync(path, { recursive: true, force: true });
+    throw repoError(e);
+  }
+  return { path };
+}
+
+/**
+ * Существующую папку — в git-репозиторий: init и первый коммит из того, что в ней уже лежит (.gitignore уважается).
+ * Папка уже внутри репозитория — 409. Свой .git у папки уже есть, но git его не принял (чужой владелец, битый HEAD) — тоже 409
+ * с причиной от git и ничего не трогаем: это чья-то история. Сорвалось — убираем только .git, который сделали сами.
+ */
+export async function makeRepo(path: string): Promise<{ path: string }> {
+  const top = await git(path, ["rev-parse", "--show-toplevel"]).then(
+    () => undefined,
+    (e: Error) => e.message,
+  );
+  if (top === undefined) throw new HttpError(409, L("Папка уже в git-репозитории", "The folder is already in a git repository"));
+  if (existsSync(join(path, ".git")))
+    throw new HttpError(409, `${L("В папке уже есть .git, но git его не принимает — разберись с ним вручную, история не трогается", "The folder already has .git but git doesn't accept it — sort it out by hand, the history is left alone")}: ${top}`);
+  try {
+    await initRepo(path);
+  } catch (e) {
+    rmSync(join(path, ".git"), { recursive: true, force: true });
+    throw repoError(e);
+  }
+  return { path };
+}
+
+/** git init + первый коммит (пустой, если файлов нет): задаче нужна ветка, а от репозитория без коммитов её не сделать. */
+async function initRepo(path: string): Promise<void> {
+  await git(path, ["init", "-q", "-b", "main"]);
+  // большая папка без .gitignore индексируется долго — на это минуты, а не 15 с
+  await git(path, ["add", "-A"], 5 * 60_000);
+  // без имени и почты в git коммит не сделать — тогда подписываемся сами (только этот коммит)
+  const known = (await git(path, ["config", "user.name"]).catch(() => "")).trim() && (await git(path, ["config", "user.email"]).catch(() => "")).trim();
+  const who = known ? [] : ["-c", "user.name=KraBness", "-c", "user.email=krabness@localhost"];
+  await git(path, [...who, "commit", "-q", "--allow-empty", "-m", L("Начало", "Start")], 5 * 60_000);
+}
+
+const repoError = (e: unknown) =>
+  new HttpError(409, `${L("Не получилось сделать git-репозиторий (git установлен?)", "Couldn't create a git repository (is git installed?)")}: ${(e as Error).message.split("\n")[0]}`);

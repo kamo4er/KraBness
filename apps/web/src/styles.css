@@ -223,6 +223,8 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 .folders { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .folders__bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--bg2); border-bottom: 1px solid var(--line); }
 .folders__path { flex: 1; font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folders__new { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.folders__new .input { flex: 1; min-width: 160px; }
 .folders__list { list-style: none; margin: 0; padding: 4px; max-height: 260px; overflow-y: auto; }
 .folders > .muted { padding: 6px 10px; margin: 0; border-top: 1px solid var(--line); font-size: 13px; }
 .folder__row { display: flex; align-items: center; gap: 6px; padding-right: 4px; }
@@ -371,6 +373,14 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 .project__edit { width: 100%; min-height: 60vh; font-size: 13px; line-height: 1.5; tab-size: 2; white-space: pre; resize: vertical; }
 /* пробуждение ПК */
 .wake__steps { display: flex; flex-direction: column; gap: 10px; padding-left: 20px; margin: 8px 0; }
+/* удалённый доступ: «настрою сервер сам» и журнал настройки */
+.remote__auto { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 10px 0; display: flex; flex-direction: column; gap: 8px; }
+.remote__auto p { margin: 0; }
+.remote__fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.remote__fields label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.remote__log { max-height: 220px; overflow: auto; font-size: 12px; white-space: pre-wrap; margin: 0; }
+.remote__manual { margin: 8px 0; }
+.remote__manual summary { cursor: pointer; color: var(--muted); }
 .wake__steps li { line-height: 1.6; }
 .wake__token { width: 360px; max-width: 100%; display: inline-block; }
 .wake__url { width: 260px; max-width: 100%; display: inline-block; }
@@ -427,6 +437,22 @@ section .update__notes { margin: 6px 0 10px; }
 .tasks__askbox { border: 1px solid var(--warn, #e3b341); border-radius: 10px; padding: 10px 12px; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; background: color-mix(in srgb, var(--warn, #e3b341) 8%, transparent); }
 .tasks__askbox .pre { margin: 0; align-self: stretch; white-space: pre-wrap; }
 .tasks__askbox p { margin: 0; }
+.tasks__icon--approval { color: var(--warn, #e3b341); }
+/* команда: этапы по порядку, текущий подсвечен */
+.team-ribbon { list-style: none; display: flex; flex-wrap: wrap; gap: 4px; padding: 0; margin: 8px 0; font-size: 13px; }
+.team-ribbon li { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.team-ribbon__done { color: var(--ok) !important; border-color: color-mix(in srgb, var(--ok) 40%, transparent) !important; }
+.team-ribbon__now { color: var(--text) !important; border-color: var(--accent) !important; background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.team-ribbon__failed { color: var(--err) !important; border-color: var(--err) !important; }
+.tasks__roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin: 8px 0; }
+.tasks__roles label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.tasks__spec { border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px; max-height: 60vh; overflow: auto; }
+.tasks__specedit { width: 100%; box-sizing: border-box; font-size: 13px; }
+.tasks__approval > .row { margin-top: 10px; }
+.tasks__proto { margin-top: 12px; }
+.tasks__proto p { margin: 0 0 6px; }
+.tasks__specbox { margin: 10px 0; }
+.tasks__specbox summary { cursor: pointer; color: var(--muted); }
 
 /* расход токенов */
 .usage__presets .btn--on { border-color: var(--accent); color: var(--accent); }

@@ -21,6 +21,8 @@ KEY=""
 PORT=17420
 DOMAIN=""
 TUSER=krabtunnel
+# 1 — no web part (Caddy, the site, ports 80/443 are left alone)
+NO_WEB=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --key) KEY="${2:-}"; shift 2 ;;
@@ -55,11 +57,13 @@ fi
 
 # ports 80 and 443: Let's Encrypt needs them, and someone else may already listen there
 busy="$(ss -ltnpH 2>/dev/null | awk '$4 ~ /:(80|443)$/' | grep -v '"caddy"' || true)"
-[ -z "$busy" ] || fail "ports 80/443 are taken by another program, Caddy can't get a certificate:
+if [ -n "$busy" ]; then
+  fail "ports 80/443 are taken by another program, Caddy can't get a certificate:
 $busy"
+fi
 
 # --- Caddy ---
-if ! command -v caddy >/dev/null 2>&1; then
+if [ "$NO_WEB" != 1 ] && ! command -v caddy >/dev/null 2>&1; then
   command -v apt-get >/dev/null 2>&1 || fail "no apt-get here: install Caddy yourself (https://caddyserver.com/docs/install) and run again"
   say "installing Caddy"
   export DEBIAN_FRONTEND=noninteractive
@@ -76,6 +80,12 @@ NOLOGIN="$(command -v nologin || echo /usr/sbin/nologin)"
 if ! id "$TUSER" >/dev/null 2>&1; then
   say "creating user $TUSER"
   useradd --system --create-home --home-dir "/home/$TUSER" --shell "$NOLOGIN" "$TUSER"
+else
+  # an existing user with a login shell is someone's real account: replacing its authorized_keys would lock them out
+  case "$(getent passwd "$TUSER" | cut -d: -f7)" in
+    */nologin | */false) ;;
+    *) fail "user $TUSER already exists and can log in: pick another --user (its SSH keys would be replaced)" ;;
+  esac
 fi
 HOME_DIR="$(getent passwd "$TUSER" | cut -d: -f6)"
 install -d -m 700 -o "$TUSER" -g "$TUSER" "$HOME_DIR/.ssh"
@@ -92,6 +102,7 @@ if command -v sshd >/dev/null 2>&1; then
 fi
 
 # --- Caddyfile: our block between markers, everything else stays ---
+if [ "$NO_WEB" != 1 ]; then
 CF=/etc/caddy/Caddyfile
 BLOCK="# >>> krabness ($TUSER)
 $DOMAIN {
@@ -124,7 +135,10 @@ out="$(caddy validate --config "$CF" --adapter caddyfile 2>&1)" || fail "Caddyfi
 $out"
 systemctl enable --now caddy >/dev/null 2>&1 || true
 systemctl reload caddy || systemctl restart caddy
+fi
 
+
+SERVER="$(echo "$DOMAIN" | grep -q 'sslip.io$' && echo "${IP:-$DOMAIN}" || echo "$DOMAIN")"
 
 # --- firewall ---
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
@@ -140,7 +154,6 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 
-SERVER="$(echo "$DOMAIN" | grep -q 'sslip.io$' && echo "${IP:-$DOMAIN}" || echo "$DOMAIN")"
 cat <<EOF
 
 Done. In KraBness (Settings -> Remote access) enter:
@@ -149,4 +162,6 @@ Done. In KraBness (Settings -> Remote access) enter:
   Public address:  https://$DOMAIN
 EOF
 [ "$code" = "000" ] && echo "Note: https://$DOMAIN doesn't answer yet. Check that ports 80 and 443 are open in your hosting panel firewall too."
+# for the hub when it sets the server up by itself (Settings -> Remote access -> Set up the server for me)
+echo "KRABNESS-OK $SERVER $TUSER https://$DOMAIN"
 exit 0

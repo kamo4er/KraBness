@@ -163,10 +163,14 @@ function Install-KraBness {
   New-Item -ItemType Directory -Force -Path (Join-Path $dir 'data\updates') | Out-Null
   [IO.File]::WriteAllText((Join-Path $dir 'data\updates\installed.json'), (@{ version = $version; entries = $entries } | ConvertTo-Json -Compress))
 
-  # config: port and token (the rest are defaults, editable in the UI)
+  # config: port, token and the repository (the rest are defaults, editable in the UI);
+  # without the repository a hub installed from another repository would look for updates in the default one
   $cfg = @{}
   if ($port -ne 7420) { $cfg.port = $port }
-  if ($token) { $cfg.updates = @{ token = $token } }
+  $upd = @{}
+  if ($token) { $upd.token = $token }
+  if ($env:KRABNESS_REPO) { $upd.repo = $repo }
+  if ($upd.Count) { $cfg.updates = $upd }
   if ($cfg.Count) {
     New-Item -ItemType Directory -Force -Path (Join-Path $dir 'config') | Out-Null
     [IO.File]::WriteAllText((Join-Path $dir 'config\kamharn.json'), ($cfg | ConvertTo-Json -Depth 5))

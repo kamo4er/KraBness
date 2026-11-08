@@ -10,18 +10,23 @@ if (target.startsWith("denied@")) {
   process.stderr.write("denied@127.0.0.1: Permission denied (publickey).\r\n");
   process.exit(255);
 }
-const [bindHost, bindPort, toHost, toPort] = args[args.indexOf("-R") + 1].split(":");
-const srv = createServer((sock) => {
-  const up = connect(Number(toPort), toHost);
-  sock.pipe(up).pipe(sock);
-  up.on("error", () => sock.destroy());
-  sock.on("error", () => up.destroy());
-});
-srv.on("error", () => {
-  process.stderr.write(`Error: remote port forwarding failed for listen port ${bindPort}\n`);
-  process.exit(255);
-});
-srv.listen(Number(bindPort), bindHost);
+if (args.includes("-R")) {
+  const [bindHost, bindPort, toHost, toPort] = args[args.indexOf("-R") + 1].split(":");
+  const srv = createServer((sock) => {
+    const up = connect(Number(toPort), toHost);
+    sock.pipe(up).pipe(sock);
+    up.on("error", () => sock.destroy());
+    sock.on("error", () => up.destroy());
+  });
+  srv.on("error", () => {
+    process.stderr.write(`Error: remote port forwarding failed for listen port ${bindPort}\n`);
+    process.exit(255);
+  });
+  srv.listen(Number(bindPort), bindHost);
+} else {
+  // без -R (только прокси) процесс держат одни -L, а их может и не быть
+  setInterval(() => {}, 1 << 30);
+}
 // -L: локальный порт → порт «на VPS» (в тесте — тоже на этой машине)
 args.forEach((a, i) => {
   if (a !== "-L") return;

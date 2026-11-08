@@ -5,13 +5,14 @@
 // (tunnelSockets в auth.ts), иначе любой процесс на VPS получил бы доверие localhost без токена.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { userInfo } from "node:os";
-import type { RemoteSettings, RemoteStatus } from "@kamharn/protocol";
+import type { ProvisionRequest, ProvisionStatus, RemoteSettings, RemoteStatus } from "@kamharn/protocol";
 import type { ConfigStore } from "./config.ts";
 import { DEFAULT_REPO } from "./updates.ts";
 import { HttpError } from "./sessions.ts";
 import { L } from "./lang.ts";
+import { provisionVps } from "./provision.ts";
 
 export const DEFAULT_REMOTE_PORT = 17420;
 const MAX_BACKOFF_MS = 60_000;
@@ -62,6 +63,22 @@ export async function probeHub(url: string, version: string): Promise<{ ok: true
   return { ok: true, ms: Date.now() - t0 };
 }
 
+/** публичный адрес туннеля: https://домен без пути, http — только loopback (проверки на этом ПК) */
+function remoteUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new HttpError(400, L("Публичный адрес — вида https://krab.1-2-3-4.sslip.io", "Public address — like https://krab.1-2-3-4.sslip.io"));
+  }
+  // по http токен ушёл бы через интернет открытым текстом
+  const loopback = /^(127\.\d+\.\d+\.\d+|localhost|\[::1\])$/.test(url.hostname);
+  if (!(url.protocol === "https:" || (url.protocol === "http:" && loopback)) || url.username || url.password || url.search || url.hash || url.pathname !== "/") {
+    throw new HttpError(400, L("Публичный адрес — только https://домен, без пути", "Public address — https://domain only, no path"));
+  }
+  return url.origin;
+}
+
 /** Свой публичный адрес: https://домен без пути; http — только loopback (проверки на этом ПК). */
 export function checkPublicUrl(raw: string): string {
   let url: URL;
@@ -90,6 +107,10 @@ export interface RemoteOptions {
   sshPrefix?: string[];
   /** столько ssh должен прожить, чтобы считать туннель поднятым (с ExitOnForwardFailure он падает сразу) */
   upAfterMs?: number;
+  /** тесты: где лежит scripts/vps-setup.sh и сколько ждать туннель после настройки сервера */
+  repoRoot?: string;
+  provisionChecks?: number;
+  provisionPauseMs?: number;
 }
 
 export class RemoteTunnel {
@@ -235,7 +256,7 @@ export class RemoteTunnel {
       this.set("up");
       this.backoff = 2000;
       this.lastLogged = undefined;
-      this.o.log?.(`[remote] ${L("туннель поднят", "tunnel is up")}: ${c.url}`);
+      this.o.log?.(`[remote] ${L("туннель поднят", "tunnel is up")}: ${c.url || c.host}`);
     }, this.o.upAfterMs ?? 4000);
     let done = false;
     const finish = (line: string) => {
@@ -309,22 +330,11 @@ export class RemoteTunnel {
     };
     const sshPort = port(b.sshPort, 22, 1);
     const remotePort = port(b.remotePort, DEFAULT_REMOTE_PORT, 1024);
-    const raw = String(b.url ?? "").trim() || defaultRemoteUrl(host);
-    let url: URL;
-    try {
-      url = new URL(raw);
-    } catch {
-      throw new HttpError(400, L("Публичный адрес — вида https://krab.1-2-3-4.sslip.io", "Public address — like https://krab.1-2-3-4.sslip.io"));
-    }
-    // по http токен ушёл бы через интернет открытым текстом; http — только для проверок на этом ПК
-    const loopback = /^(127\.\d+\.\d+\.\d+|localhost|\[::1\])$/.test(url.hostname);
-    if (!(url.protocol === "https:" || (url.protocol === "http:" && loopback)) || url.username || url.password || url.search || url.hash || url.pathname !== "/") {
-      throw new HttpError(400, L("Публичный адрес — только https://домен, без пути", "Public address — https://domain only, no path"));
-    }
+    const url = remoteUrl(String(b.url ?? "").trim() || defaultRemoteUrl(host));
     if (b.enabled !== undefined && typeof b.enabled !== "boolean") throw new HttpError(400, "enabled: true | false");
     // сохранение — заново доверяем ключу сервера (переустановили VPS — достаточно сохранить ещё раз)
     rmSync(this.knownHosts, { force: true });
-    this.o.config.setRemote({ host, user, sshPort, remotePort, url: url.origin, enabled: b.enabled ?? true });
+    this.o.config.setRemote({ host, user, sshPort, remotePort, url, enabled: b.enabled ?? true });
     this.error = undefined;
     this.apply();
     return this.status();
@@ -339,14 +349,90 @@ export class RemoteTunnel {
   }
 
   /** доходит ли до хаба запрос снаружи: https://<url>/api/health через VPS и туннель */
-  async test(): Promise<{ ok: true; ms: number }> {
+  async test(): Promise<{ ok: true; ms: number; ip?: string }> {
     const c = this.cfg;
     if (!c) throw new HttpError(409, L("Удалённый доступ не настроен", "Remote access isn't set up"));
     return probeHub(c.url, this.o.version);
   }
 
+
+  private job?: ProvisionStatus;
+  /** закрытие хаба рвёт идущую настройку сервера */
+  private jobAbort?: AbortController;
+
+  provisionStatus(): ProvisionStatus {
+    return this.job ?? { running: false, log: [] };
+  }
+
+  /**
+   * Настроить сервер самому (фоном, на свежем сервере — пара минут): SSH с паролем или ключом владельца → свой
+   * scripts/vps-setup.sh с ключом туннеля → сохранить адрес → туннель → проверка снаружи. Пароль дальше этого вызова не живёт.
+   */
+  startProvision(b: Partial<ProvisionRequest>): ProvisionStatus {
+    if (this.job?.running) throw new HttpError(409, L("Настройка сервера уже идёт", "The server setup is already running"));
+    const host = String(b.host ?? "")
+      .trim()
+      .replace(/^\[(.*)\]$/, "$1");
+    if (!host || host.startsWith("-") || !/^([a-z0-9.-]+|[0-9a-f:]+)$/i.test(host)) throw new HttpError(400, L("Адрес сервера — IP или домен, без ssh:// и порта", "Server address — IP or domain, without ssh:// and port"));
+    const user = String(b.user ?? "").trim() || "root";
+    if (!/^[a-z_][a-z0-9_.-]{0,31}$/i.test(user)) throw new HttpError(400, L("Неверное имя пользователя", "Invalid user name"));
+    const sshPort = b.sshPort === undefined || String(b.sshPort) === "" ? 22 : Number(b.sshPort);
+    if (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) throw new HttpError(400, L("SSH-порт — число от 1 до 65535", "SSH port — a number from 1 to 65535"));
+    const password = typeof b.password === "string" && b.password ? b.password : undefined;
+    const privateKey = typeof b.privateKey === "string" && b.privateKey.trim() ? b.privateKey.trim() + "\n" : undefined;
+    if (!password && !privateKey) throw new HttpError(400, L("Нужен пароль или ключ от сервера", "The server password or key is required"));
+    this.ensureKey();
+    const key = readFileSync(this.keyPath + ".pub", "utf8").trim();
+    const c = this.cfg;
+    const args = ["--key", key, ...(c && c.remotePort !== DEFAULT_REMOTE_PORT ? ["--port", String(c.remotePort)] : [])];
+    const proxy = {};
+    // скрипт — свой, локальный: из приватной репы по ссылке он не скачается, а у сборок разный набор
+    const script = readFileSync(join(this.o.repoRoot ?? resolve(import.meta.dirname, "../../.."), "scripts", "vps-setup.sh"), "utf8");
+    const job: ProvisionStatus = { running: true, log: [] };
+    this.job = job;
+    const abort = new AbortController();
+    this.jobAbort = abort;
+    const log = (line: string) => {
+      job.log.push(line);
+      if (job.log.length > 300) job.log.splice(0, job.log.length - 300);
+    };
+    void (async () => {
+      try {
+        const r = await provisionVps({ req: { host, sshPort, user, ...(password ? { password } : {}), ...(privateKey ? { privateKey } : {}) }, script, args, log, signal: abort.signal });
+        log(L("Сервер настроен, подключаю туннель", "The server is set up, connecting the tunnel"));
+        // туннель — туда же, куда только что заходили (скрипт печатает IP по ipify: при IPv6, плавающем IP или NAT он другой)
+        this.save({ host, user: r.user, url: r.url, sshPort, enabled: true, ...(c?.remotePort ? { remotePort: c.remotePort } : {}), ...proxy });
+        // туннель поднимается за секунды, сертификат на свежем сервере — до минуты
+        let reachable = false;
+        let ms: number | undefined;
+        let ip: string | undefined;
+        let note: string | undefined;
+        for (let i = 0; i < (this.o.provisionChecks ?? 30) && !reachable && !this.closed; i++) {
+          await new Promise((res) => setTimeout(res, this.o.provisionPauseMs ?? 2000));
+          if (this.state !== "up") continue;
+          try {
+            ({ ms, ip } = await this.test());
+            reachable = true;
+          } catch (e) {
+            note = (e as Error).message;
+          }
+        }
+        if (!reachable) note = note ?? this.error ?? L("туннель не поднялся", "the tunnel didn't come up");
+        job.done = { ...r, reachable, ...(ms !== undefined ? { ms } : {}), ...(note && !reachable ? { note } : {}) };
+        log(reachable ? L(`Готово: хаб доступен по ${r.url} (${ms} мс)`, `Done: the hub is reachable at ${r.url} (${ms} ms)`) : L(`Сервер настроен, но снаружи хаб пока не отвечает: ${note}`, `The server is set up, but the hub doesn't answer from outside yet: ${note}`));
+      } catch (e) {
+        job.error = (e as Error).message;
+        log(`✗ ${job.error}`);
+      } finally {
+        job.running = false;
+      }
+    })();
+    return job;
+  }
+
   close(): void {
     this.closed = true;
+    this.jobAbort?.abort();
     this.stop();
   }
 }

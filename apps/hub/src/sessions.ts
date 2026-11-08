@@ -182,7 +182,8 @@ export class SessionManager extends EventEmitter<HubEvents> {
     return s;
   }
 
-  async create(req: CreateSessionRequest, internal: { extraRules?: PermissionRule[] } = {}): Promise<SessionInfo> {
+  /** internal.confined — сессия задачи в чужой копии проекта (роли команды, ревью): тоже не выходит за неё */
+  async create(req: CreateSessionRequest, internal: { extraRules?: PermissionRule[]; confined?: boolean } = {}): Promise<SessionInfo> {
     let directory: string;
     try {
       directory = this.config.resolveAllowed(req.directory);
@@ -216,7 +217,7 @@ export class SessionManager extends EventEmitter<HubEvents> {
     let engineSessionId: string;
     try {
       // шаг задачи в копии проекта: наружу (в основную папку и дальше) агент не ходит и не спрашивает об этом
-      engineSessionId = await engine.createSession({ directory, model, permissionMode, title: req.title, ...(req.taskId && worktree ? { confined: true } : {}), ...(internal.extraRules ? { extraRules: internal.extraRules } : {}) });
+      engineSessionId = await engine.createSession({ directory, model, permissionMode, title: req.title, ...((req.taskId && worktree) || internal.confined ? { confined: true } : {}), ...(internal.extraRules ? { extraRules: internal.extraRules } : {}) });
     } catch (e) {
       if (worktree) await removeWorktree(worktree);
       throw e;

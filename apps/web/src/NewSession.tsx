@@ -310,11 +310,16 @@ function ImportClaude() {
   );
 }
 
-export function FolderPicker({ value, onChange }: { value?: string; onChange: (p: string) => void }) {
+/** git — новая папка сразу становится репозиторием с первым коммитом (задаче нужна своя ветка) */
+export function FolderPicker({ value, onChange, git = false }: { value?: string; onChange: (p: string) => void; git?: boolean }) {
   const [cwd, setCwd] = useState<string | undefined>(value);
   const [entries, setEntries] = useState<FsEntry[]>([]);
   const [roots, setRoots] = useState<string[]>([]);
   const [error, setError] = useState<string>();
+  // новая папка: имя (undefined — поле закрыто), идёт создание, перечитать список
+  const [newName, setNewName] = useState<string>();
+  const [making, setMaking] = useState(false);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     void client.roots().then(setRoots);
@@ -329,7 +334,26 @@ export function FolderPicker({ value, onChange }: { value?: string; onChange: (p
         setError((e as Error).message);
         setCwd(undefined);
       });
-  }, [cwd]);
+  }, [cwd, reload]);
+
+  // где создавать: открытая папка, а на самом верху — единственная разрешённая (обычно Projects)
+  const target = cwd || (roots.length === 1 ? roots[0] : undefined);
+  const make = () => {
+    if (!target || !newName?.trim()) return;
+    setMaking(true);
+    setError(undefined);
+    client
+      .mkdir(target, newName, git)
+      .then((r) => {
+        setNewName(undefined);
+        // создали на самом верху — переходим в ту папку, чтобы новая была видна в списке
+        if (cwd !== target) setCwd(target);
+        else setReload((n) => n + 1);
+        onChange(r.path);
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setMaking(false));
+  };
 
   const root = roots.find((r) => cwd && cwd.toLowerCase().startsWith(r.toLowerCase()));
   const up = cwd && root && cwd.length > root.length ? cwd.replace(/[\\/][^\\/]+$/, "") : undefined;
@@ -346,12 +370,33 @@ export function FolderPicker({ value, onChange }: { value?: string; onChange: (p
           </button>
         )}
         <span className="folders__path">{cwd ?? t("Разрешённые папки", "Allowed folders")}</span>
+        {target && (
+          <button className="btn btn--small" title={git ? t("Новая папка — сразу git-репозиторий", "New folder — a git repository right away") : t("Новая папка здесь", "New folder here")} onClick={() => setNewName(newName === undefined ? "" : undefined)}>
+            {t("+ Папка", "+ Folder")}
+          </button>
+        )}
         {cwd && (
           <button className={`btn btn--small ${value === cwd ? "btn--primary" : ""}`} onClick={() => onChange(cwd)}>
             {value === cwd ? t("✓ выбрана", "✓ selected") : t("Выбрать", "Select")}
           </button>
         )}
       </div>
+      {newName !== undefined && (
+        <div className="folders__new">
+          <input
+            className="input"
+            autoFocus
+            value={newName}
+            placeholder={t("имя новой папки", "new folder name")}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => (e.key === "Enter" ? make() : e.key === "Escape" ? setNewName(undefined) : undefined)}
+          />
+          <button className="btn btn--small btn--primary" disabled={making || !newName.trim()} onClick={make}>
+            {making ? t("Создаю…", "Creating…") : t("Создать", "Create")}
+          </button>
+          {git && <span className="muted">{t("сразу с git: задаче нужна своя ветка", "with git right away: a task needs its own branch")}</span>}
+        </div>
+      )}
       {error && <p className="error">{error}</p>}
       <ul className="folders__list">
         {entries.map((e) => (

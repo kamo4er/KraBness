@@ -41,6 +41,8 @@ import {
   type CreateTaskRequest,
   type TaskAction,
   type RemoteStatus,
+  type ProvisionRequest,
+  type ProvisionStatus,
   type NewSessionPrefs,
   type WakeSetup,
   type CustomProvider,
@@ -62,7 +64,7 @@ export { ago, baseName, fmtTokens, fmtCost, localDay } from "./format.ts";
 export { parseFileRef, resolveFileRef, type FileRef } from "./paths.ts";
 export { mentionAt, mentionText, applyMention } from "./mention.ts";
 export { ARTIFACT_ERROR_MAX, artifactDocument, artifactError, artifactFixPrompt, artifactHeight, artifactSource, isArtifactFile, isArtifactLang, isRunnablePage } from "./artifact.ts";
-export { engineUsable, engineName, modelKey, parseModelKey, modelOptions, optionReady, defaultTaskModels, brainOptions, brainDownText, computerHint, goalBeyondTitle, fileKind, type EngineModelOption } from "./taskModels.ts";
+export { engineUsable, engineName, modelKey, parseModelKey, modelOptions, optionReady, defaultTaskModels, brainOptions, brainDownText, computerHint, goalBeyondTitle, specForReading, notRepoError, fileKind, type EngineModelOption } from "./taskModels.ts";
 export { t, tn, locale, getLang, getLangSetting, applyLangSetting, onLangChange } from "./i18n.ts";
 export { lineDiff, type DiffRow } from "./diff.ts";
 export { sessionActions, actionGroupName, permissionShort, sessionSummary, matchQuery, branchName, type SessionAction, type SessionActionId, type SessionActionGroup, type SessionActionsOpts } from "./sessionActions.ts";
@@ -474,6 +476,10 @@ export class HubClient {
   addRoot = (path: string) => this.api<string[]>("POST", "/api/roots", { path });
   removeRoot = (path: string) => this.api<string[]>("DELETE", "/api/roots", { path });
   list = (path?: string) => this.api<FsEntry[]>("GET", "/api/fs/list" + (path ? `?path=${encodeURIComponent(path)}` : ""));
+  /** новая папка в parent; git — сразу репозиторий с первым коммитом (для задач) */
+  mkdir = (parent: string, name: string, git = false) => this.api<{ path: string }>("POST", "/api/fs/mkdir", { parent, name, git });
+  /** существующую папку — в git-репозиторий с первым коммитом из того, что в ней лежит */
+  gitInit = (path: string) => this.api<{ path: string }>("POST", "/api/fs/git-init", { path });
 
   pairStart = () => this.api<{ code: string; expiresAt: number }>("POST", "/api/pair/start", {});
   pairComplete = (code: string, name: string) => this.api<{ deviceId: string; token: string }>("POST", "/api/pair/complete", { code, name });
@@ -502,7 +508,9 @@ export class HubClient {
   remoteStatus = () => this.api<RemoteStatus>("GET", "/api/remote");
   saveRemote = (r: Partial<RemoteSettings>) => this.api<RemoteStatus>("PUT", "/api/remote", r);
   removeRemote = () => this.api<RemoteStatus>("DELETE", "/api/remote");
-  testRemote = () => this.api<{ ok: true; ms: number }>("POST", "/api/remote/test", {});
+  testRemote = () => this.api<{ ok: true; ms: number; ip?: string }>("POST", "/api/remote/test", {});
+  provisionServer = (r: ProvisionRequest) => this.api<ProvisionStatus>("POST", "/api/remote/provision", r);
+  provisionStatus = () => this.api<ProvisionStatus>("GET", "/api/remote/provision");
   addresses = () => this.api<{ urls: string[]; publicUrls: string[]; previewUrl: string }>("GET", "/api/addresses");
   setPreviewUrl = (url: string) => this.api<{ previewUrl: string }>("PUT", "/api/addresses/preview", { url });
   checks = (id: string) => this.api<ChecksConfig>("GET", `/api/sessions/${id}/checks`);

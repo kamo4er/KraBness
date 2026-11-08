@@ -1,15 +1,17 @@
 // Задачи: хаб сам ведёт работу от цели до отчёта (исполнитель → проверки → ревью → правки), а в конце спрашивает решение.
 import { useEffect, useState } from "react";
-import { branchName, defaultTaskModels, engineName, fileKind, goalBeyondTitle, modelOptions, optionReady, parseModelKey, t, type EngineInfo, type EngineModelOption, type NewSessionPrefs, type TaskInfo, type TaskStep, tn } from "@kamharn/client";
+import { branchName, defaultTaskModels, engineName, fileKind, goalBeyondTitle, specForReading, notRepoError, modelOptions, optionReady, parseModelKey, t, type EngineInfo, type EngineModelOption, type NewSessionPrefs, type TaskInfo, type TaskStep, tn } from "@kamharn/client";
 import { client, fmtTime, go, useEngines, useHub } from "./hub.ts";
 import { FolderPicker } from "./NewSession.tsx";
 import { EffortSelect } from "./Effort.tsx";
 import { Markdown } from "./Parts.tsx";
+import { ArtifactCard } from "./Artifact.tsx";
 
 const STATUS = (): Record<TaskInfo["status"], string> => ({
   queued: t("в очереди", "queued"),
   running: t("работает", "running"),
   waiting_limit: t("ждёт лимит", "waiting for the limit"),
+  approval: t("спецификация ждёт одобрения", "specification awaits approval"),
   ready: t("готово, нужно решение", "ready, needs your decision"),
   merged: t("влито", "merged"),
   discarded: t("выброшено", "discarded"),
@@ -21,9 +23,13 @@ const STEP = (): Record<TaskStep["kind"], string> => ({
   checks: t("проверки", "checks"),
   review: t("ревью", "review"),
   fix: t("правит", "fixing"),
+  analysis: t("аналитик", "analyst"),
+  ux: t("дизайнер", "designer"),
+  design: t("архитектор", "architect"),
+  test: t("тестировщик", "tester"),
 });
 
-export const taskIcon = (s: TaskInfo["status"]): string => (s === "queued" ? "⋯" : s === "running" ? "▶" : s === "waiting_limit" ? "⏳" : s === "ready" ? "●" : s === "merged" ? "✓" : s === "failed" ? "✗" : "—");
+export const taskIcon = (s: TaskInfo["status"]): string => (s === "queued" ? "⋯" : s === "running" ? "▶" : s === "waiting_limit" ? "⏳" : s === "approval" ? "✋" : s === "ready" ? "●" : s === "merged" ? "✓" : s === "failed" ? "✗" : "—");
 
 /** Ближайшая ночь: сегодня 02:00, если ещё не наступило, иначе завтра. */
 export function nextNight(now = new Date()): number {
@@ -67,9 +73,13 @@ export function Tasks() {
               <button className="tasks__item" onClick={() => go({ page: "task", id: x.id })}>
                 <span className={`tasks__icon tasks__icon--${x.status}`}>{taskIcon(x.status)}</span>
                 <span className="settings-list__text">
-                  <b>{x.title}</b>
+                  <b>
+                    {x.mode === "team" ? <span title={t("команда", "a team")}>👥 </span> : null}
+                    {x.title}
+                  </b>
                   <span className="muted">
                     {x.asking ? <b className="tasks__asking">✋ {t("ждёт твоего ответа", "waiting for your answer")}</b> : STATUS()[x.status]}
+                    {!x.asking && x.mode === "team" && x.status === "running" && x.stage ? ` · ${STAGES().find((s) => s.key === x.stage)?.label.toLowerCase() ?? ""}` : ""}
                     {x.status === "queued" && x.startAt ? ` (${new Date(x.startAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })})` : ""} · {fmtTime(x.updatedAt)}
                     {x.report?.files.length ? ` · ${t("файлов", "files")}: ${x.report.files.length}` : ""}
                   </span>
@@ -121,12 +131,22 @@ function NewTask({ onDone }: { onDone: () => void }) {
   const [error, setError] = useState<string>();
   const [workerEffort, setWorkerEffort] = useState(() => localStorage.getItem("task.workerEffort") ?? "");
   const [reviewEffort, setReviewEffort] = useState(() => localStorage.getItem("task.reviewEffort") ?? "");
+  // команда: аналитик и архитектор по умолчанию — как разработчик (""), тестировщик — как ревью (другая модель)
+  const [team, setTeam] = useState(() => localStorage.getItem("task.mode") === "team");
+  const [analyst, setAnalyst] = useState(() => localStorage.getItem("task.analyst") ?? "");
+  const [architect, setArchitect] = useState(() => localStorage.getItem("task.architect") ?? "");
+  const [tester, setTester] = useState(() => localStorage.getItem("task.tester") ?? "");
+  const [designerMode, setDesignerMode] = useState(() => (localStorage.getItem("task.designerMode") as "auto" | "on" | "off" | null) ?? "auto");
+  const [designer, setDesigner] = useState(() => localStorage.getItem("task.designer") ?? "");
   const options = modelOptions(engines);
   const defs = defaultTaskModels(engines, prefs);
   // сохранённый выбор пропал (движок выключили, модель убрали) — берём умолчание
   const workerKey = optionReady(options, worker) ? worker : (defs.worker ?? "");
   const effortsOf = (key: string) => options.find((o) => o.key === key)?.model.efforts ?? [];
   const reviewKey = review === "none" || optionReady(options, review) ? review : (defs.review ?? "none");
+  const sameKey = (v: string) => (optionReady(options, v) ? v : "");
+  const testerKey = tester === "none" || optionReady(options, tester) ? tester : (defs.review ?? "none");
+  const remember = (key: string, set: (v: string) => void) => (v: string) => (set(v), localStorage.setItem(key, v));
   useEffect(() => void client.roots().then((r) => setDir((d) => d || r[0] || "")), []);
   useEffect(() => void client.newSessionPrefs().then(setPrefs, () => {}), []);
   const pickWorker = (v: string) => {
@@ -146,11 +166,32 @@ function NewTask({ onDone }: { onDone: () => void }) {
       const r = parseModelKey(reviewKey);
       const we = effortsOf(workerKey).includes(workerEffort) ? workerEffort : "";
       const re = effortsOf(reviewKey).includes(reviewEffort) ? reviewEffort : "";
+      // роль команды: своя модель или как у разработчика
+      const member = (key: string) => {
+        const m = parseModelKey(key || workerKey);
+        return m ? { engine: m.engine, model: m.model } : undefined;
+      };
+      const tm = parseModelKey(testerKey);
       const task = await client.createTask({
         goal,
         directory: dir,
         ...(w ? { workerEngine: w.engine, workerModel: w.model, ...(we ? { workerEffort: we } : {}) } : {}),
-        ...(reviewKey === "none" ? { reviewModel: null } : r ? { reviewEngine: r.engine, reviewModel: r.model, ...(re ? { reviewEffort: re } : {}) } : {}),
+        ...(team
+          ? {
+              mode: "team" as const,
+              designer: designerMode,
+              team: {
+                analyst: member(sameKey(analyst)),
+                ...(designerMode !== "off" ? { designer: member(sameKey(designer)) } : {}),
+                architect: member(sameKey(architect)),
+                tester: testerKey === "none" ? null : tm ? { engine: tm.engine, model: tm.model } : undefined,
+              },
+            }
+          : reviewKey === "none"
+            ? { reviewModel: null }
+            : r
+              ? { reviewEngine: r.engine, reviewModel: r.model, ...(re ? { reviewEffort: re } : {}) }
+              : {}),
         ...(night ? { startAt: nextNight() } : {}),
       });
       go({ page: "task", id: task.id });
@@ -162,13 +203,48 @@ function NewTask({ onDone }: { onDone: () => void }) {
     }
   };
 
+  // папка не в git: делаем репозиторий (файлы в ней войдут в первый коммит — переспрашиваем) и сразу запускаем
+  const makeRepoAndStart = async () => {
+    const files = await client.list(dir).catch(() => []);
+    if (files.length && !confirm(t(`В папке уже есть файлы (${files.length}) — они войдут в первый коммит. Продолжить?`, `The folder already has files (${files.length}) — they go into the first commit. Continue?`))) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await client.gitInit(dir);
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+      return;
+    }
+    await create();
+  };
+
   return (
     <section>
       <h3>{t("Новая задача", "New task")}</h3>
       <textarea className="input" rows={4} placeholder={t("Что сделать? Например: добавь экспорт списка в CSV и тест на него", "What to do? For example: add CSV export for the list and a test for it")} value={goal} onChange={(e) => setGoal(e.target.value)} autoFocus />
       <h3>{t("Проект", "Project")}</h3>
-      <FolderPicker value={dir} onChange={setDir} />
-      <h3>{t("Исполнитель", "Worker")}</h3>
+      <FolderPicker value={dir} onChange={setDir} git />
+      <h3>{t("Кто делает", "Who does it")}</h3>
+      <div className="row tasks__mode">
+        <label className="row">
+          <input type="radio" checked={!team} onChange={() => (setTeam(false), localStorage.setItem("task.mode", "simple"))} />
+          {t("Один агент", "One agent")}
+        </label>
+        <label className="row">
+          <input type="radio" checked={team} onChange={() => (setTeam(true), localStorage.setItem("task.mode", "team"))} />
+          {t("Команда", "A team")}
+        </label>
+      </div>
+      {team && (
+        <p className="muted">
+          {t(
+            "Аналитик расспросит тебя и напишет спецификацию, дизайнер нарисует интерфейс и кликабельный прототип (если задача про него), архитектор проверит, ты одобришь — потом разработчик делает, а тестировщик проверяет по критериям и возвращает баги. Дольше и дороже одного агента, зато ошибка в понимании ловится до кода.",
+            "The analyst asks you questions and writes a specification, the designer draws the interface and a clickable prototype (if the task is about it), the architect checks it, you approve it — then the developer builds and the tester checks against the criteria and sends bugs back. Slower and pricier than one agent, but a misunderstanding is caught before any code.",
+          )}
+        </p>
+      )}
+      <h3>{team ? t("Разработчик", "Developer") : t("Исполнитель", "Worker")}</h3>
       {options.length ? (
         <select className="select" value={workerKey} onFocus={refresh} onChange={(e) => pickWorker(e.target.value)}>
           <ModelGroups options={options} />
@@ -179,18 +255,61 @@ function NewTask({ onDone }: { onDone: () => void }) {
       ) : (
         <p className="error">{t("Нет ни одного доступного движка: запусти opencode или войди в Claude Code.", "No engine is available: start opencode or sign in to Claude Code.")}</p>
       )}
-      <h3>{t("Ревью", "Review")}</h3>
-      <select className="select" value={reviewKey} onFocus={refresh} onChange={(e) => pickReview(e.target.value)}>
-        <option value="none">{t("без ревью", "no review")}</option>
-        <ModelGroups options={options} />
-      </select>
-      {reviewKey !== "none" && <EffortSelect efforts={effortsOf(reviewKey)} value={reviewEffort} onChange={(v) => (setReviewEffort(v), localStorage.setItem("task.reviewEffort", v))} />}
-      {reviewKey !== "none" && reviewKey === workerKey ? <p className="muted">{t("Ревью той же моделью видит меньше: лучше выбрать другую.", "A review by the same model catches less: better pick another one.")}</p> : null}
+      {team ? (
+        <div className="tasks__roles">
+          <label>
+            {t("Аналитик", "Analyst")}
+            <select className="select" value={sameKey(analyst)} onFocus={refresh} onChange={(e) => remember("task.analyst", setAnalyst)(e.target.value)}>
+              <option value="">{t("как у разработчика", "same as the developer")}</option>
+              <ModelGroups options={options} />
+            </select>
+          </label>
+          <label>
+            {t("Дизайнер", "Designer")}
+            <select className="select" value={designerMode} onChange={(e) => remember("task.designerMode", (v) => setDesignerMode(v as "auto" | "on" | "off"))(e.target.value)}>
+              <option value="auto">{t("если задача про интерфейс (решит аналитик)", "if the task is about the interface (the analyst decides)")}</option>
+              <option value="on">{t("всегда", "always")}</option>
+              <option value="off">{t("без дизайнера", "no designer")}</option>
+            </select>
+            {designerMode !== "off" && (
+              <select className="select" value={sameKey(designer)} onFocus={refresh} onChange={(e) => remember("task.designer", setDesigner)(e.target.value)}>
+                <option value="">{t("как у разработчика", "same as the developer")}</option>
+                <ModelGroups options={options} />
+              </select>
+            )}
+          </label>
+          <label>
+            {t("Архитектор", "Architect")}
+            <select className="select" value={sameKey(architect)} onFocus={refresh} onChange={(e) => remember("task.architect", setArchitect)(e.target.value)}>
+              <option value="">{t("как у разработчика", "same as the developer")}</option>
+              <ModelGroups options={options} />
+            </select>
+          </label>
+          <label>
+            {t("Тестировщик", "Tester")}
+            <select className="select" value={testerKey} onFocus={refresh} onChange={(e) => remember("task.tester", setTester)(e.target.value)}>
+              <option value="none">{t("без тестировщика", "no tester")}</option>
+              <ModelGroups options={options} />
+            </select>
+          </label>
+          {testerKey !== "none" && testerKey === workerKey ? <p className="muted">{t("Тестировщик той же моделью видит меньше: лучше выбрать другую.", "A tester on the same model catches less: better pick another one.")}</p> : null}
+        </div>
+      ) : (
+        <>
+          <h3>{t("Ревью", "Review")}</h3>
+          <select className="select" value={reviewKey} onFocus={refresh} onChange={(e) => pickReview(e.target.value)}>
+            <option value="none">{t("без ревью", "no review")}</option>
+            <ModelGroups options={options} />
+          </select>
+          {reviewKey !== "none" && <EffortSelect efforts={effortsOf(reviewKey)} value={reviewEffort} onChange={(v) => (setReviewEffort(v), localStorage.setItem("task.reviewEffort", v))} />}
+          {reviewKey !== "none" && reviewKey === workerKey ? <p className="muted">{t("Ревью той же моделью видит меньше: лучше выбрать другую.", "A review by the same model catches less: better pick another one.")}</p> : null}
+        </>
+      )}
       <label className="row">
         <input type="checkbox" checked={night} onChange={() => setNight(!night)} />
         {t("Запустить ночью (в 02:00)", "Start at night (02:00)")}
       </label>
-      <p className="muted">{t("Исполнитель работает в своей копии проекта. Ревью лучше отдать другой модели: она замечает то, что исполнитель пропустил. Замечания возвращаются исполнителю (до 2 кругов).", "The worker runs in its own copy of the project. Give the review to a different model: it catches what the worker missed. Its remarks go back to the worker (up to 2 rounds).")}</p>
+      {!team && <p className="muted">{t("Исполнитель работает в своей копии проекта. Ревью лучше отдать другой модели: она замечает то, что исполнитель пропустил. Замечания возвращаются исполнителю (до 2 кругов).", "The worker runs in its own copy of the project. Give the review to a different model: it catches what the worker missed. Its remarks go back to the worker (up to 2 rounds).")}</p>}
       <div className="row">
         <button className="btn btn--primary" disabled={busy || !goal.trim() || !dir || !workerKey} onClick={() => void create()}>
           {busy ? t("Запускаю…", "Starting…") : t("Запустить", "Start")}
@@ -200,6 +319,14 @@ function NewTask({ onDone }: { onDone: () => void }) {
         </button>
       </div>
       {error && <p className="error">{error}</p>}
+      {error && notRepoError(error) && (
+        <div className="row">
+          <button className="btn btn--primary btn--small" disabled={busy} onClick={() => void makeRepoAndStart()}>
+            {t("Сделать папку git-репозиторием и запустить", "Make the folder a git repository and start")}
+          </button>
+          <span className="muted">{t("первый коммит — из того, что уже лежит в папке", "the first commit holds what's already in the folder")}</span>
+        </div>
+      )}
     </section>
   );
 }
@@ -221,6 +348,101 @@ function ModelGroups({ options }: { options: EngineModelOption[] }) {
         </optgroup>
       ))}
     </>
+  );
+}
+
+/** Этапы команды по порядку; ✋ — где решаешь ты. */
+const STAGES = (): Array<{ key: string; label: string }> => [
+  { key: "analysis", label: t("Аналитик", "Analyst") },
+  { key: "ux", label: t("Дизайнер", "Designer") },
+  { key: "design", label: t("Архитектор", "Architect") },
+  { key: "approval", label: `✋ ${t("Одобрение", "Approval")}` },
+  { key: "dev", label: t("Разработчик", "Developer") },
+  { key: "testing", label: t("Тестировщик", "Tester") },
+  { key: "ready", label: `✋ ${t("Решение", "Decision")}` },
+];
+
+/** Где сейчас задача команды (ключ из STAGES). */
+function teamNow(task: TaskInfo): string | undefined {
+  if (task.status === "approval") return "approval";
+  if (task.status === "ready" || task.status === "merged") return "ready";
+  if (task.status === "running" || task.status === "waiting_limit" || task.status === "failed") return task.stage ?? "dev";
+  return undefined;
+}
+
+/** Дизайнер в задаче и задача про интерфейс (в «авто» — пока аналитик не сказал «нет»). */
+const designerTakesPart = (task: TaskInfo) => !!task.team?.designer && (task.designerMode === "on" || task.ui !== false);
+
+function TeamRibbon({ task }: { task: TaskInfo }) {
+  const all = STAGES();
+  const now = teamNow(task);
+  const at = now ? all.findIndex((s) => s.key === now) : -1;
+  return (
+    <ol className="team-ribbon">
+      {all.map((s, i) =>
+        (s.key === "testing" && !task.team?.tester) || (s.key === "ux" && !designerTakesPart(task)) ? null : (
+          <li key={s.key} className={i < at ? "team-ribbon__done" : i === at ? (task.status === "failed" ? "team-ribbon__failed" : "team-ribbon__now") : ""}>
+            {s.label}
+          </li>
+        ),
+      )}
+    </ol>
+  );
+}
+
+/** Спецификация ждёт тебя: прочитать, поправить руками, одобрить или вернуть аналитику. */
+function SpecApproval({ task, busy, act }: { task: TaskInfo; busy: boolean; act: (f: () => Promise<unknown>) => void }) {
+  const [edit, setEdit] = useState(false);
+  const [text, setText] = useState(task.spec ?? "");
+  const [note, setNote] = useState("");
+  const analyst = task.team?.analyst?.sessionId;
+  const edited = edit && text.trim() !== (task.spec ?? "").trim();
+  return (
+    <section className="tasks__approval">
+      <h3>{t("Спецификация — нужно твоё решение", "Specification — your decision is needed")}</h3>
+      {task.designRemarks && (
+        <div className="tasks__askbox">
+          <b>{t("Архитектор так и не одобрил. Его последние замечания:", "The architect never approved. Their latest remarks:")}</b>
+          <Markdown text={task.designRemarks} />
+        </div>
+      )}
+      {edit ? (
+        <textarea className="input mono tasks__specedit" rows={18} value={text} onChange={(e) => setText(e.target.value)} />
+      ) : (
+        <div className="tasks__spec">
+          <Markdown text={specForReading(task.spec ?? "")} />
+        </div>
+      )}
+      {task.prototype && (
+        <div className="tasks__proto">
+          <p className="muted">{t("Прототип дизайнера — понажимай, это макет с выдуманными данными:", "The designer's prototype — click around, it's a mock-up with made-up data:")}</p>
+          <ArtifactCard source={task.prototype} title={t("Прототип", "Prototype")} autoRun />
+        </div>
+      )}
+      <div className="row">
+        <button className="btn btn--primary" disabled={busy || (edit && !text.trim())} onClick={() => act(() => client.taskAction(task.id, edited ? { action: "approve", spec: text } : { action: "approve" }))}>
+          {edited ? t("Сохранить и одобрить", "Save and approve") : t("Одобрить — в разработку", "Approve — start development")}
+        </button>
+        <button className="btn" disabled={busy} onClick={() => (setText(task.spec ?? ""), setEdit(!edit))}>
+          {edit ? t("Отменить правку", "Cancel editing") : t("Поправить руками", "Edit by hand")}
+        </button>
+        <button className="btn btn--danger" disabled={busy} onClick={() => confirm(t("Выбросить задачу?", "Discard the task?")) && act(() => client.taskAction(task.id, { action: "discard" }))}>
+          {t("Выбросить", "Discard")}
+        </button>
+      </div>
+      <p>{t("Или вернуть аналитику с комментарием:", "Or send it back to the analyst with a comment:")}</p>
+      <div className="row">
+        <input className="input" value={note} placeholder={t("что поправить", "what to change")} onChange={(e) => setNote(e.target.value)} />
+        <button className="btn" disabled={busy || !note.trim()} onClick={() => act(async () => (await client.taskAction(task.id, { action: "revise", comment: note }), setNote("")))}>
+          {t("Вернуть аналитику", "Send back")}
+        </button>
+      </div>
+      {analyst && (
+        <button className="btn btn--small" onClick={() => go({ page: "session", id: analyst })}>
+          {t("обсудить с аналитиком в чате", "discuss with the analyst in the chat")}
+        </button>
+      )}
+    </section>
   );
 }
 
@@ -257,12 +479,20 @@ export function Task({ id }: { id: string }) {
             <b>{STATUS()[task.status]}</b> · <span className="mono muted">{task.directory}</span>
             {task.worktree ? <span className="muted"> · {t("ветка", "branch")} <code title={task.worktree.branch}>{branchName(task.worktree.branch)}</code></span> : null}
           </p>
+          {task.mode === "team" && <TeamRibbon task={task} />}
           {/* цель целиком — только если заголовок её обрезал: иначе тот же текст дважды */}
           {goalBeyondTitle(task) && <pre className="pre task__goal">{task.goal}</pre>}
           {task.error && <p className="error">{task.error}</p>}
           {task.asking && (
             <div className="tasks__askbox">
-              <b>✋ {task.asking.kind === "permission" ? t("Агент ждёт твоего разрешения", "The agent is waiting for your permission") : t("Агент задал вопрос", "The agent asked a question")}</b>
+              <b>
+                ✋{" "}
+                {task.asking.kind === "permission"
+                  ? t("Агент ждёт твоего разрешения", "The agent is waiting for your permission")
+                  : task.asking.kind === "reply"
+                    ? t("Аналитик задал вопросы — ответь в его чате", "The analyst has questions — answer in their chat")
+                    : t("Агент задал вопрос", "The agent asked a question")}
+              </b>
               {task.asking.text && <pre className="pre">{task.asking.text}</pre>}
               <p className="muted">{t("Пока не ответишь, задача стоит.", "The task is on hold until you answer.")}</p>
               <button className="btn btn--primary btn--small" onClick={() => go({ page: "session", id: task.asking!.sessionId })}>
@@ -286,6 +516,16 @@ export function Task({ id }: { id: string }) {
             </div>
           )}
         </section>
+
+        {task.status === "approval" ? (
+          <SpecApproval key={task.spec} task={task} busy={busy} act={act} />
+        ) : task.spec ? (
+          <details className="tasks__specbox">
+            <summary>{t("Спецификация", "Specification")}</summary>
+            <Markdown text={specForReading(task.spec)} />
+            {task.prototype && <ArtifactCard source={task.prototype} title={t("Прототип", "Prototype")} autoRun />}
+          </details>
+        ) : null}
 
         <section>
           <h3>{t("Шаги", "Steps")}</h3>
@@ -313,7 +553,17 @@ export function Task({ id }: { id: string }) {
             <h3>{t("Отчёт", "Report")}</h3>
             <p className="muted">
               {t("Проверки", "Checks")}: {r.checks === "passed" ? t("прошли ✓", "passed ✓") : r.checks === "failed" ? t("не прошли ✗", "failed ✗") : t("не настроены", "not configured")} ·{" "}
-              {t("ревью", "review")}: {r.review === "ok" ? t("замечаний нет", "no remarks") : r.review === "fixed" ? t("замечания исправлены", "remarks fixed") : r.review === "remarks" ? t("остались замечания", "remarks left") : t("не делали", "skipped")}
+              {task.mode === "team" ? (
+                <>
+                  {t("тестировщик", "tester")}:{" "}
+                  {r.test === "passed" ? t("принял ✓", "accepted ✓") : r.test === "bugs" ? t("остались проблемы ✗", "problems left ✗") : t("не было", "none")}
+                  {task.testRounds ? ` (${tn(task.testRounds, ["круг", "круга", "кругов"], ["round", "rounds"])})` : ""}
+                </>
+              ) : (
+                <>
+                  {t("ревью", "review")}: {r.review === "ok" ? t("замечаний нет", "no remarks") : r.review === "fixed" ? t("замечания исправлены", "remarks fixed") : r.review === "remarks" ? t("остались замечания", "remarks left") : t("не делали", "skipped")}
+                </>
+              )}
               {r.commit ? ` · ${t("коммит", "commit")} ${r.commit}` : ""}
             </p>
             {r.summary && <Markdown text={r.summary} />}
@@ -333,6 +583,12 @@ export function Task({ id }: { id: string }) {
               <details>
                 <summary className="muted">{t("Замечания ревью", "Review remarks")}</summary>
                 <Markdown text={r.reviewText} />
+              </details>
+            )}
+            {r.testText && (
+              <details open={r.test === "bugs"}>
+                <summary className="muted">{t("Отчёт тестировщика", "Tester's report")}</summary>
+                <Markdown text={r.testText} />
               </details>
             )}
           </section>

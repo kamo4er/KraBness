@@ -270,11 +270,16 @@ function ImportClaude() {
   );
 }
 
-export function FolderPicker({ value, onChange }: { value?: string; onChange: (p: string) => void }) {
+/** git — новая папка сразу становится репозиторием с первым коммитом (задаче нужна своя ветка) */
+export function FolderPicker({ value, onChange, git = false }: { value?: string; onChange: (p: string) => void; git?: boolean }) {
   const [cwd, setCwd] = useState<string | undefined>(value);
   const [entries, setEntries] = useState<FsEntry[]>([]);
   const [roots, setRoots] = useState<string[]>([]);
   const [error, setError] = useState<string>();
+  // новая папка: имя (undefined — поле закрыто), идёт создание, перечитать список
+  const [newName, setNewName] = useState<string>();
+  const [making, setMaking] = useState(false);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     void client?.roots().then(setRoots);
@@ -289,7 +294,26 @@ export function FolderPicker({ value, onChange }: { value?: string; onChange: (p
         setError((e as Error).message);
         setCwd(undefined);
       });
-  }, [cwd]);
+  }, [cwd, reload]);
+
+  // где создавать: открытая папка, а на самом верху — единственная разрешённая (обычно Projects)
+  const target = cwd || (roots.length === 1 ? roots[0] : undefined);
+  const make = () => {
+    if (!target || !newName?.trim() || !client) return;
+    setMaking(true);
+    setError(undefined);
+    client
+      .mkdir(target, newName, git)
+      .then((r) => {
+        setNewName(undefined);
+        // создали на самом верху — переходим в ту папку, чтобы новая была видна в списке
+        if (cwd !== target) setCwd(target);
+        else setReload((n) => n + 1);
+        onChange(r.path);
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setMaking(false));
+  };
 
   const root = roots.find((r) => cwd && cwd.toLowerCase().startsWith(r.toLowerCase()));
   const up = cwd && root && cwd.length > root.length ? cwd.replace(/[\\/][^\\/]+$/, "") : undefined;
@@ -302,8 +326,26 @@ export function FolderPicker({ value, onChange }: { value?: string; onChange: (p
         <Text style={[S.muted, { flex: 1 }]} numberOfLines={2}>
           {cwd ?? t("Разрешённые папки", "Allowed folders")}
         </Text>
+        {target ? <Btn small title="+" onPress={() => setNewName(newName === undefined ? "" : undefined)} /> : null}
         {cwd ? <Btn small kind={value === cwd ? "primary" : "default"} title={value === cwd ? "✓" : t("Выбрать", "Select")} onPress={() => onChange(cwd)} /> : null}
       </View>
+      {newName !== undefined ? (
+        <View style={st.folderNew}>
+          <View style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
+            <TextInput
+              style={[S.input, { flex: 1 }]}
+              autoFocus
+              value={newName}
+              onChangeText={setNewName}
+              onSubmitEditing={make}
+              placeholder={t("имя новой папки", "new folder name")}
+              placeholderTextColor={C.muted}
+            />
+            <Btn small kind="primary" title={making ? "…" : t("Создать", "Create")} disabled={making || !newName.trim()} onPress={make} />
+          </View>
+          {git ? <Text style={S.muted}>{t("Сразу с git: задаче нужна своя ветка.", "With git right away: a task needs its own branch.")}</Text> : null}
+        </View>
+      ) : null}
       {error ? <Text style={S.error}>{error}</Text> : null}
       {entries.map((e) => (
         <View key={e.path} style={st.folderRow}>
@@ -332,5 +374,6 @@ const st = StyleSheet.create({
   folders: { backgroundColor: C.bg2, borderRadius: 12, borderWidth: 1, borderColor: C.line, overflow: "hidden" },
   folderBar: { flexDirection: "row", alignItems: "center", gap: 6, padding: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line },
   folderRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line },
+  folderNew: { gap: 6, padding: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line },
   create: { marginTop: 24, minHeight: 50 },
 });
