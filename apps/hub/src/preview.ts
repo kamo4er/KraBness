@@ -39,7 +39,8 @@ const unzip: Record<string, (b: Buffer) => Promise<Buffer>> = {
   deflate: promisify(inflate),
 };
 // системное и своё: в списке превью не нужно
-const SKIP = /^(system|idle|svchost|lsass|wininit|services|spoolsv|tailscaled|tailscale-ipn|opencode|searchhost|msedgewebview2|onedrive|steam|nvcontainer|amnezia\S*|code|memu\S*|adb|vmms|jhi_service|mysqld|synology.*)$/i;
+// macOS: ControlCenter держит AirPlay на :5000/:7000, rapportd и sharingd — Handoff и общий доступ
+const SKIP = /^(system|idle|svchost|lsass|wininit|services|spoolsv|tailscaled|tailscale-ipn|opencode|searchhost|msedgewebview2|onedrive|steam|nvcontainer|amnezia\S*|code|memu\S*|adb|vmms|jhi_service|mysqld|synology.*|controlcenter|rapportd|sharingd|identityservicesd|code helper.*|tailscale|launchd)$/i;
 
 /** Отвечает ли порт по HTTP (превью имеет смысл только для веб-серверов). */
 function speaksHttp(address: string, port: number): Promise<boolean> {
@@ -60,21 +61,72 @@ const PS_LIST = [
   "$l | ForEach-Object { $x = $p[[int]$_.OwningProcess]; [pscustomobject]@{ port = $_.LocalPort; address = $_.LocalAddress; pid = $_.OwningProcess; process = if ($x) { $x.Name -replace '\\.exe$','' } else { '' }; command = if ($x -and $x.CommandLine) { $x.CommandLine } else { '' } } } | ConvertTo-Json -Compress",
 ].join("; ");
 
-/** Порты, которые слушают процессы на ПК (Windows). */
-export function listPorts(opts: { directory?: string; exclude?: number[]; selfPid?: number } = {}): Promise<ListeningPort[]> {
+type RawPort = Record<string, unknown>;
+
+/** Windows: Get-NetTCPConnection + процессы одним вызовом PowerShell */
+function winPorts(): Promise<RawPort[]> {
   return new Promise((resolve) => {
-    if (process.platform !== "win32") return resolve([]);
     execFile("powershell.exe", ["-NoProfile", "-Command", PS_LIST], { windowsHide: true, timeout: 20_000, maxBuffer: 8 << 20 }, (err, out) => {
       if (err || !out.trim()) return resolve([]);
-      let raw: unknown;
       try {
-        raw = JSON.parse(out);
+        const raw = JSON.parse(out) as unknown;
+        resolve((Array.isArray(raw) ? raw : [raw]) as RawPort[]);
       } catch {
-        return resolve([]);
+        resolve([]);
       }
+    });
+  });
+}
+
+/** Разбор `lsof -F pcn`: строки p<pid>, c<имя>, n<адрес:порт> (адрес «*» — все, IPv6 в скобках). */
+export function parseLsof(out: string): Array<{ port: number; address: string; pid: number; process: string }> {
+  const rows: Array<{ port: number; address: string; pid: number; process: string }> = [];
+  let pid = 0;
+  let name = "";
+  for (const line of out.split("\n")) {
+    const v = line.slice(1);
+    if (line[0] === "p") pid = Number(v);
+    else if (line[0] === "c") name = v;
+    else if (line[0] === "n") {
+      const m = /^(\*|\[[0-9a-f:.]+\]|[\d.]+):(\d+)$/i.exec(v.trim());
+      if (!m) continue;
+      const host = m[1]!;
+      const address = host === "*" ? "0.0.0.0" : host.replace(/^\[|\]$/g, "");
+      rows.push({ port: Number(m[2]), address, pid, process: name });
+    }
+  }
+  return rows.filter((r) => r.port >= 1024);
+}
+
+/** macOS/Linux: lsof (только свои процессы — dev-серверы и так свои), командные строки — из ps */
+function posixPorts(): Promise<RawPort[]> {
+  return new Promise((resolve) => {
+    // +c 0 — имя процесса целиком (по умолчанию lsof режет до 9 символов)
+    execFile("lsof", ["-nP", "+c", "0", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"], { timeout: 20_000, maxBuffer: 8 << 20 }, (_err, out) => {
+      const rows = parseLsof(String(out ?? ""));
+      const pids = [...new Set(rows.map((r) => r.pid))];
+      if (!pids.length) return resolve([]);
+      execFile("ps", ["-o", "pid=,command=", "-p", pids.join(",")], { timeout: 10_000, maxBuffer: 8 << 20 }, (_e, psOut) => {
+        const cmd = new Map<number, string>();
+        for (const l of String(psOut ?? "").split("\n")) {
+          const m = /^\s*(\d+)\s+(.*)$/.exec(l);
+          if (m) cmd.set(Number(m[1]), m[2]!);
+        }
+        resolve(rows.map((r) => ({ ...r, command: cmd.get(r.pid) ?? "" })));
+      });
+    });
+  });
+}
+
+/** Порты, которые слушают процессы на ПК. */
+export function listPorts(opts: { directory?: string; exclude?: number[]; selfPid?: number } = {}): Promise<ListeningPort[]> {
+  return new Promise((resolve) => {
+    void (process.platform === "win32" ? winPorts() : posixPorts()).then((raw) => {
+      if (!raw.length) return resolve([]);
+      // на маке регистр в путях не важен (APFS по умолчанию), на Windows — тем более
       const dir = opts.directory?.toLowerCase().replace(/[\\/]+$/, "");
       const seen = new Map<number, ListeningPort>();
-      for (const r of (Array.isArray(raw) ? raw : [raw]) as Array<Record<string, unknown>>) {
+      for (const r of raw) {
         const port = Number(r.port);
         const pid = Number(r.pid);
         const name = String(r.process ?? "");

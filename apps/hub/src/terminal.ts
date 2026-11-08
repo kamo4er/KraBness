@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import { killTree } from "./proc.ts";
+import { killTree, posixShell } from "./proc.ts";
 import { L } from "./lang.ts";
 
 /** хвост вывода, который держим в памяти */
@@ -64,7 +64,7 @@ export class Terminal {
             env: { ...process.env, KH_CMD: cmd },
             stdio: ["ignore", "pipe", "pipe"],
           })
-        : spawn("sh", ["-c", cmd], { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
+        : spawn(...posixShell(cmd), { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
     run.proc = proc;
     // setEncoding склеивает символы UTF-8, разрезанные между кусками вывода
     const add = (s: string) => this.append(run, s);

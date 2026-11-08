@@ -67,7 +67,7 @@ test("туннель на VPS: поднимается, переподключа�
     assert.equal((await api("PUT", "/api/remote", { host: "1.2.3.4", user: "ok", url: "https://x.example/path" })).status, 400);
     assert.equal((await api("PUT", "/api/remote", { host: "1.2.3.4", user: "ok", url: "http://x.example" })).status, 400, "токен по http через интернет — нет");
     assert.equal((await api("PUT", "/api/remote", { host: "1.2.3.4", user: "ok", enabled: "false" })).status, 400);
-    if (process.platform === "win32") await Promise.race([orphanExit, new Promise((_, rej) => setTimeout(() => rej(new Error("сирота жива")), 5000))]);
+    await Promise.race([orphanExit, new Promise((_, rej) => setTimeout(() => rej(new Error("сирота жива")), 5000))]);
     // по IP адрес на sslip.io подставляется сам
     st = (await api("PUT", "/api/remote", { host: "1.2.3.4", user: "ok", enabled: false })).j;
     assert.equal(st.settings.url, "https://krab.1-2-3-4.sslip.io");

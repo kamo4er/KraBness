@@ -1,5 +1,5 @@
-# KraBness on a real Mac (Apple Silicon): typecheck, unit tests, then a clean install with install.sh,
-# the hub under launchd, restart and update from the UI. Runs on the mac-ci branch while macOS support is in beta.
+# KraBness on a real Mac (Apple Silicon): typecheck and unit tests; separately a clean install with install.sh,
+# the hub under launchd, restart from the UI and from the command line. Runs on the mac-ci branch while macOS support is in beta.
 name: mac
 
 on:
@@ -8,10 +8,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  mac:
+  test:
     if: github.repository == 'kamo4er/KraBness'
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -23,7 +23,44 @@ jobs:
           git config --global user.name "KraBness CI"
           git config --global user.email "ci@example.com"
           git config --global init.defaultBranch main
-      - run: sw_vers && uname -m && echo "SHELL=$SHELL" && echo "PATH=$PATH"
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+      # TMPDIR of a Mac is /var/folders/..., a symlink to /private/var: the hub stores real paths, tests compare
+      # with tmpdir(). runner.temp has no symlinks (same trick as TEMP on the Windows runner)
+      # --test-timeout: a hung test fails with its name instead of hanging the whole job
+      - run: |
+          npm test -w @kamharn/protocol
+          cd apps/hub && node --env-file=test/unit/test.env --import tsx --test --test-timeout=120000 test/unit/*.test.ts
+        timeout-minutes: 20
+        env:
+          TMPDIR: ${{ runner.temp }}
+
+  install:
+    if: github.repository == 'kamo4er/KraBness'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - run: sw_vers && uname -m && echo "SHELL=$SHELL" && echo "PATH=$PATH"
+      # a clean install like a person does it: release zip of this commit, no questions, the hub under launchd
+      - name: install.sh from scratch
+        run: |
+          git archive --format=zip -o "$RUNNER_TEMP/krabness.zip" HEAD
+          KRABNESS_DIR="$HOME/KraBness" KRABNESS_ZIP="$RUNNER_TEMP/krabness.zip" KRABNESS_OPENCODE=0 KRABNESS_CLAUDE=0 \
+            KRABNESS_AUTOSTART=1 KRABNESS_OPEN=0 bash scripts/install.sh
+        timeout-minutes: 15
+      - name: hub runs under launchd and restarts
+        run: bash scripts/ci/mac-smoke.sh "$HOME/KraBness"
+        timeout-minutes: 10
+      - name: collect logs
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          cp -R "$HOME/KraBness/data/logs" "$RUNNER_TEMP/out/" 2>/dev/null || true
+          cp "$HOME/Library/LaunchAgents/dev.krabness.hub.plist" "$RUNNER_TEMP/out/" 2>/dev/null || true
+          "$HOME/KraBness/scripts/krabness" status > "$RUNNER_TEMP/out/status.txt" 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-logs
+          path: ${{ runner.temp }}/out

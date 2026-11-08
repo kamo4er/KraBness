@@ -8,7 +8,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync, type ChildProcess } from "node:child_process";
 import type { CustomProvider, EngineInfo, ModelInfo, ModelRef, Part, PermissionMode, PermissionReply, QuestionAnswers, SessionEvent, ToolStatus } from "@kamharn/protocol";
 import type { Engine, EngineSink, PermissionRule, PromptFile } from "./types.ts";
-import { killPidTree, killTree, spawn } from "../proc.ts";
+import { killPidTree, killTree, posixBin, spawn } from "../proc.ts";
+import { homedir } from "node:os";
 import { readSse } from "../sse.ts";
 import { L } from "../lang.ts";
 import { opencodeRecord } from "../usage.ts";
@@ -84,11 +85,9 @@ function killStale(pidFile: string): void {
     const r = spawnSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], { encoding: "utf8", windowsHide: true });
     if (/opencode/i.test(r.stdout ?? "")) killPidTree(pid);
   } else {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      /* уже нет */
-    }
+    // то же правило: только если это всё ещё opencode
+    const r = spawnSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" });
+    if (/opencode/i.test(r.stdout ?? "")) killPidTree(pid);
   }
 }
 
@@ -98,7 +97,8 @@ export function resolveOpencodeBin(bin?: string): string {
     const exe = join(process.env.APPDATA, "npm", "node_modules", "opencode-ai", "bin", "opencode.exe");
     if (existsSync(exe)) return exe;
   }
-  return "opencode";
+  // официальный установщик opencode кладёт его в ~/.opencode/bin
+  return (process.platform !== "win32" && posixBin("opencode", [join(homedir(), ".opencode", "bin")])) || "opencode";
 }
 
 export class OpencodeEngine implements Engine {

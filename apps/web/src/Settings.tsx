@@ -220,7 +220,11 @@ function HubSection() {
           {t("Перезапустить хаб", "Restart hub")}
         </button>
       ) : (
-        <p className="muted">{t("Перезапуск из UI работает, когда хаб запущен через scripts\\hub-service.ps1 (автозапуск: scripts\\autostart.ps1).", "Restarting from the UI works when the hub runs via scripts\\hub-service.ps1 (autostart: scripts\\autostart.ps1).")}</p>
+        <p className="muted">
+          {info?.platform && info.platform !== "win32"
+            ? t("Перезапуск из UI работает, когда хаб запущен сторожем: ~/KraBness/scripts/krabness start (так его запускает установщик).", "Restarting from the UI works when the hub runs under the supervisor: ~/KraBness/scripts/krabness start (that's how the installer starts it).")
+            : t("Перезапуск из UI работает, когда хаб запущен через scripts\\hub-service.ps1 (автозапуск: scripts\\autostart.ps1).", "Restarting from the UI works when the hub runs via scripts\\hub-service.ps1 (autostart: scripts\\autostart.ps1).")}
+        </p>
       )}
       {/* с телефона через браузер: что сейчас на экране ПК */}
       <button className="btn" onClick={() => window.open(client.screenUrl(), "_blank")}>

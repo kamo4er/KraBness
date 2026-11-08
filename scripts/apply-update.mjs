@@ -18,8 +18,8 @@ const root = resolve(arg("root") ?? ".");
 const data = resolve(arg("data") ?? join(root, "data"));
 const dir = join(data, "updates");
 const backup = join(dir, "backup");
-// это не трогаем никогда: данные, настройки, рабочие папки
-const KEEP = new Set(["data", "config", "tmp", ".git", ".env", "node_modules"]);
+// это не трогаем никогда: данные, настройки, рабочие папки, свой Node на маке (runtime)
+const KEEP = new Set(["data", "config", "tmp", ".git", ".env", "node_modules", "runtime"]);
 // своё внутри заменяемых папок: ключ подписи и Firebase, сборка приложения
 const PRESERVE = ["apps/mobile/credentials", "apps/mobile/node_modules", "apps/mobile/android"];
 

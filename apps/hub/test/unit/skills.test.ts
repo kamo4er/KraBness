@@ -9,7 +9,8 @@ import { tmpdir } from "node:os";
 import { crc32, gzipSync } from "node:zlib";
 import { Skills, parseGithub } from "../../src/skills.ts";
 
-const TAR = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+// zip умеет bsdtar: на Windows — System32\tar.exe (у git-bash свой GNU tar без zip), на маке — встроенный tar
+const TAR = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "bsdtar";
 const md = (name: string, desc = "Делает что-то полезное") => `---\nname: ${name}\ndescription: ${desc}\n---\n\n# ${name}\n\nИнструкция.\n`;
 const tmp = () => mkdtempSync(join(tmpdir(), "kamharn-sk-"));
 

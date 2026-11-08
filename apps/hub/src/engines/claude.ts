@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { spawnSync, type ChildProcess } from "node:child_process";
 import type { ClaudeAuthInfo, ClaudeLimits, EngineInfo, ModelInfo, ModelRef, Part, PermissionMode, PermissionReply, QuestionAnswers, QuestionItem } from "@kamharn/protocol";
 import type { Engine, EngineSink, PromptFile } from "./types.ts";
-import { killTree, spawn } from "../proc.ts";
+import { killTree, posixBin, spawn } from "../proc.ts";
 import { L } from "../lang.ts";
 
 export interface ClaudeOptions {
@@ -128,7 +128,7 @@ export function resolveClaudeBin(bin?: string): string {
     const exe = join(process.env.APPDATA, "npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
     if (existsSync(exe)) return exe;
   }
-  return "claude";
+  return (process.platform !== "win32" && posixBin("claude")) || "claude";
 }
 
 export function toolTitle(tool: string, input: unknown): string {

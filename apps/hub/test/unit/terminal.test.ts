@@ -1,14 +1,18 @@
 // Мини-терминал: вывод (с кириллицей) кусками по смещению, код выхода, «Стоп», одна команда за раз, история.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHub } from "../../src/hub.ts";
 
 const win = process.platform === "win32";
+// команды под оболочку платформы: cmd.exe на Windows, логин-оболочка (zsh) на маке
+const C = win
+  ? { echo: "echo привет && cd && echo ошибка 1>&2", exit3: "exit /b 3", long: "ping -n 30 127.0.0.1" }
+  : { echo: "echo привет && pwd && echo ошибка 1>&2", exit3: "exit 3", long: "sleep 30" };
 
-test("терминал: команда в папке сессии, вывод по смещению, код выхода, стоп, история", { skip: !win && "команды Windows" }, async () => {
+test("терминал: команда в папке сессии, вывод по смещению, код выхода, стоп, история", async () => {
   const base = mkdtempSync(join(tmpdir(), "kamharn-"));
   const dir = join(base, "Projects", "app");
   mkdirSync(dir, { recursive: true });
@@ -37,18 +41,19 @@ test("терминал: команда в папке сессии, вывод п
     throw new Error("команда не закончилась");
   };
   try {
-    const a = await runToEnd("echo привет && cd && echo ошибка 1>&2");
+    const a = await runToEnd(C.echo);
     assert.match(a.out, /привет/);
     assert.match(a.out, /ошибка/, "stderr тоже виден");
-    assert.ok(a.out.toLowerCase().includes(dir.toLowerCase()), "команда выполнилась в папке сессии");
+    // на маке /var/folders — ссылка на /private/var/folders, pwd печатает настоящий путь
+    assert.ok(a.out.toLowerCase().includes(dir.toLowerCase()) || a.out.includes(realpathSync(dir)), "команда выполнилась в папке сессии");
     assert.equal(a.exitCode, 0);
     // повторное чтение с нуля отдаёт всё, с конца — пусто
     assert.equal(((await api("GET", `/api/term/${a.runId}?from=0`)).json as { data: string }).data, a.out);
     assert.equal(((await api("GET", `/api/term/${a.runId}?from=999999`)).json as { data: string }).data, "");
 
-    assert.equal((await runToEnd("exit /b 3")).exitCode, 3);
+    assert.equal((await runToEnd(C.exit3)).exitCode, 3);
 
-    const long = await api("POST", "/api/sessions/s1/term", { command: "ping -n 30 127.0.0.1" });
+    const long = await api("POST", "/api/sessions/s1/term", { command: C.long });
     const busy = await api("POST", "/api/sessions/s1/term", { command: "echo 2" });
     assert.equal(busy.status, 409, "вторая команда, пока идёт первая — нельзя");
     const info = (await api("GET", "/api/sessions/s1/term")).json as { running?: { runId: string }; history: string[] };
@@ -60,7 +65,7 @@ test("терминал: команда в папке сессии, вывод п
       await new Promise((res) => setTimeout(res, 50));
     }
     assert.ok(done, "«Стоп» останавливает команду");
-    assert.deepEqual(info.history.slice(0, 3), ["ping -n 30 127.0.0.1", "exit /b 3", "echo привет && cd && echo ошибка 1>&2"]);
+    assert.deepEqual(info.history.slice(0, 3), [C.long, C.exit3, C.echo]);
     assert.equal((await api("POST", "/api/sessions/s1/term", { command: "  " })).status, 409);
     assert.equal((await api("GET", "/api/term/nope")).status, 404);
   } finally {

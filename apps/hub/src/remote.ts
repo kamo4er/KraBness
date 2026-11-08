@@ -168,11 +168,21 @@ export class RemoteTunnel {
       /* битый файл */
     }
     rmSync(this.pidFile, { force: true });
-    if (!Number.isInteger(pid) || pid <= 0 || process.platform !== "win32") return;
-    const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`], { encoding: "utf8", timeout: 15_000, windowsHide: true });
+    if (!Number.isInteger(pid) || pid <= 0) return;
+    const win = process.platform === "win32";
+    const r = win
+      ? spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`], { encoding: "utf8", timeout: 15_000, windowsHide: true })
+      : spawnSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8", timeout: 15_000 });
     // PID мог достаться другому процессу — убиваем, только если в его командной строке наш ключ
     if (r.stdout?.includes(this.keyPath)) {
-      spawnSync("taskkill", ["/pid", String(pid), "/F"], { stdio: "ignore", windowsHide: true });
+      if (win) spawnSync("taskkill", ["/pid", String(pid), "/F"], { stdio: "ignore", windowsHide: true });
+      else {
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          /* уже нет */
+        }
+      }
       this.o.log?.(`[remote] ${L("убит ssh от прошлого запуска", "killed ssh left from the previous run")} (pid ${pid})`);
     }
   }

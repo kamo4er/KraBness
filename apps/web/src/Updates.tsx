@@ -8,7 +8,7 @@ const notesOf = (u: UpdateStatus) => (u.latest ? (getLang() === "ru" ? u.latest.
 const reasonText = (u: UpdateStatus) =>
   u.reason === "git"
     ? t("Хаб запущен из папки git: обновляй через git pull.", "The hub runs from a git folder: update with git pull.")
-    : t("Хаб запущен вручную: обновление ставится, когда он работает под сторожем (scripts\\hub-service.ps1).", "The hub was started manually: updates install when it runs under the supervisor (scripts\\hub-service.ps1).");
+    : t("Хаб запущен вручную: обновление ставится, когда он работает под сторожем (так его запускает установщик).", "The hub was started manually: updates install when it runs under the supervisor (that's how the installer starts it).");
 
 const stateText = (u: UpdateStatus) =>
   u.state === "downloading"

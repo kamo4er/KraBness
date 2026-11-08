@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { CheckResult, ChecksConfig, CheckStatus, Part, SessionInfo, StoredEvent } from "@kamharn/protocol";
 import type { ConfigStore } from "./config.ts";
-import { killTree } from "./proc.ts";
+import { killTree, posixShell } from "./proc.ts";
 import { L } from "./lang.ts";
 
 export const MAX_ATTEMPTS = 3;
@@ -32,7 +32,7 @@ export function runCommand(command: string, cwd: string, timeoutMs = TIMEOUT_MS,
             env: { ...process.env, KH_CMD: command, CI: "1" },
             stdio: ["ignore", "pipe", "pipe"],
           })
-        : spawn("sh", ["-c", command], { cwd, env: { ...process.env, CI: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+        : spawn(...posixShell(command), { cwd, env: { ...process.env, CI: "1" }, stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     // держим с запасом, обрезаем при выдаче
     const add = (s: string) => void (out = (out + s).slice(-OUTPUT_TAIL * 4));

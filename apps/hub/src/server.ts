@@ -52,6 +52,7 @@ import { dayOf, usageReport } from "./usage.ts";
 import type { McpRegistry } from "./usermcp.ts";
 import { Wake } from "./wake.ts";
 import { L, setHubLang } from "./lang.ts";
+import { supervisorHint } from "./proc.ts";
 
 /** будильник для устройства в домашней сети — отдаём из настроек, чтобы не искать в репозитории */
 const WAKE_SCRIPT = join(REPO_ROOT, "scripts", "nas-wake", "wake.py");
@@ -108,7 +109,7 @@ export interface ServerDeps {
   /** папка собранного веб-UI */
   webDir?: string;
   startedAt?: number;
-  /** перезапуск самого хаба: только если его запустил сторож (scripts/hub-service.ps1) */
+  /** перезапуск самого хаба: только если его запустил сторож (scripts/hub-service.ps1, на маке — launchd) */
   restart?: { supervised: boolean; schedule(delayMs: number): void };
   /** обновления с GitHub Releases */
   updates?: Updates;
@@ -243,6 +244,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     startedAt: deps.startedAt,
     supervised: !!deps.restart?.supervised,
     canSleep: !!deps.sleep,
+    platform: process.platform,
   }));
   // язык: один на хабе; всем подключённым сразу говорим переключиться
   const langListeners = new Set<(l: LangSetting) => void>();
@@ -345,7 +347,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   });
   app.post<{ Body: { delaySec?: number } }>("/api/hub/restart", async (req) => {
     if (!deps.restart?.supervised) {
-      throw new HttpError(409, L("Хаб запущен вручную, а не сторожем (scripts/hub-service.ps1) — перезапустить сам себя не может", "The hub was started manually, not by the supervisor (scripts/hub-service.ps1) — it can't restart itself"));
+      throw new HttpError(409, L(`Хаб запущен вручную, а не сторожем (${supervisorHint()}) — перезапустить сам себя не может`, `The hub was started manually, not by the supervisor (${supervisorHint()}) — it can't restart itself`));
     }
     const delaySec = Math.min(300, Math.max(0, Number(req.body?.delaySec ?? 0) || 0));
     deps.restart.schedule(delaySec * 1000);

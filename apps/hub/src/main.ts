@@ -1,8 +1,8 @@
 import { createHub } from "./hub.ts";
-import { suspendPc } from "./power.ts";
+import { canSuspend, suspendPc } from "./power.ts";
 import { L } from "./lang.ts";
 
-// под сторожем (scripts/hub-service.ps1) перезапуск — это корректный выход, сторож поднимет хаб заново
+// под сторожем (scripts/hub-service.ps1 на Windows, scripts/supervisor.mjs на маке) перезапуск — это корректный выход, сторож поднимет хаб заново
 const supervised = process.env.KAMHARN_SUPERVISED === "1";
 export const RESTART_EXIT_CODE = 75;
 
@@ -34,7 +34,7 @@ const hub = await createHub({
   // другой конфиг — для тестового экземпляра рядом с рабочим
   ...(process.env.KAMHARN_CONFIG ? { configPath: process.env.KAMHARN_CONFIG } : {}),
   ...(supervised ? { onRestart: () => void shutdown(RESTART_EXIT_CODE) } : {}),
-  onSleep: () => suspendPc(log),
+  ...(canSuspend() ? { onSleep: () => suspendPc(log) } : {}),
   // раз в сутки смотреть выпуски на GitHub (KRABNESS_UPDATES_API — свой адрес вместо api.github.com, для проверки)
   updates: { check: true, ...(process.env.KRABNESS_UPDATES_API ? { api: process.env.KRABNESS_UPDATES_API } : {}) },
 });

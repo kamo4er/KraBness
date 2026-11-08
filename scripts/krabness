@@ -1,0 +1,130 @@
+#!/bin/bash
+# KraBness on macOS: the hub runs as a launchd agent (dev.krabness.hub) through scripts/supervisor.mjs.
+#
+#   krabness start [--no-autostart]   start the hub (and on every login, unless --no-autostart)
+#   krabness stop                     stop the hub (autostart stays as it was)
+#   krabness restart                  restart the hub
+#   krabness status                   is it running, which version, where the log is
+#   krabness logs                     follow the hub log
+#   krabness uninstall                stop and remove the launchd agent (the KraBness folder stays)
+set -euo pipefail
+
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LABEL=dev.krabness.hub
+AGENTS="$HOME/Library/LaunchAgents"
+# with autostart the agent lives in LaunchAgents (macOS loads it at login), without it — inside the KraBness folder
+AUTO_PLIST="$AGENTS/$LABEL.plist"
+MANUAL_PLIST="$DIR/data/launchd/$LABEL.plist"
+DOMAIN="gui/$(id -u)"
+LOG="$DIR/data/logs/hub.log"
+
+node_bin() {
+  if [ -x "$DIR/runtime/node/bin/node" ]; then echo "$DIR/runtime/node/bin/node"; return; fi
+  command -v node || { echo "KraBness: node not found (expected $DIR/runtime/node/bin/node)" >&2; exit 1; }
+}
+
+port() {
+  "$(node_bin)" -e 'try{console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).port||7420)}catch{console.log(7420)}' "$DIR/config/kamharn.json"
+}
+
+# the user's PATH from the login shell: under launchd PATH is bare (/usr/bin:/bin...), and Homebrew, nvm,
+# the official installers live in the shell profile. A marker in front: profiles may print greetings.
+user_path() {
+  local p
+  p="$(/bin/zsh -lic 'printf "\n__KRAB_PATH__%s\n" "$PATH"' 2>/dev/null </dev/null | sed -n 's/^__KRAB_PATH__//p' | tail -1 || true)"
+  local node_dir
+  node_dir="$(dirname "$(node_bin)")"
+  echo "$node_dir:$HOME/.local/bin:$HOME/.opencode/bin:${p:-/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+}
+
+# the UI language follows the system: launchd gives no LANG, so we take it from the macOS settings
+user_lang() {
+  local l
+  l="$(defaults read -g AppleLocale 2>/dev/null || true)"
+  l="${l%%@*}"
+  echo "${l:-en_US}.UTF-8"
+}
+
+xml() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' <<<"$1"; }
+
+write_plist() {
+  local file="$1"
+  mkdir -p "$(dirname "$file")" "$DIR/data/logs"
+  cat >"$file" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(xml "$(node_bin)")</string>
+    <string>$(xml "$DIR/scripts/supervisor.mjs")</string>
+  </array>
+  <key>WorkingDirectory</key><string>$(xml "$DIR")</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>$(xml "$(user_path)")</string>
+    <key>LANG</key><string>$(xml "$(user_lang)")</string>
+  </dict>
+  <key>StandardOutPath</key><string>$(xml "$DIR/data/logs/launchd.log")</string>
+  <key>StandardErrorPath</key><string>$(xml "$DIR/data/logs/launchd.log")</string>
+</dict>
+</plist>
+EOF
+  plutil -lint "$file" >/dev/null
+}
+
+loaded() { launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; }
+
+start() {
+  local plist="$AUTO_PLIST" other="$MANUAL_PLIST"
+  if [ "${1:-}" = "--no-autostart" ]; then plist="$MANUAL_PLIST"; other="$AUTO_PLIST"; fi
+  if loaded; then launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true; fi
+  rm -f "$other"
+  write_plist "$plist"
+  launchctl bootstrap "$DOMAIN" "$plist"
+  echo "KraBness started (http://127.0.0.1:$(port)), log: $LOG"
+}
+
+stop() {
+  if loaded; then
+    launchctl bootout "$DOMAIN/$LABEL"
+    echo "KraBness stopped"
+  else
+    echo "KraBness isn't running"
+  fi
+}
+
+status() {
+  if loaded; then
+    local pid
+    pid="$(launchctl print "$DOMAIN/$LABEL" 2>/dev/null | awk '/^\tpid = /{print $3}')"
+    echo "launchd agent: loaded${pid:+, supervisor pid $pid}"
+  else
+    echo "launchd agent: not loaded"
+  fi
+  [ -f "$AUTO_PLIST" ] && echo "autostart: on" || echo "autostart: off"
+  local p
+  p="$(port)"
+  if curl -fsS --max-time 3 "http://127.0.0.1:$p/api/health" >/dev/null 2>&1; then echo "hub: answers on http://127.0.0.1:$p"; else echo "hub: doesn't answer on port $p"; fi
+  echo "log: $LOG"
+}
+
+case "${1:-status}" in
+  start) start "${2:-}" ;;
+  stop) stop ;;
+  # bootout sends SIGTERM and waits, the supervisor stops the hub cleanly (kickstart -k could leave the hub orphaned)
+  restart) if [ -f "$AUTO_PLIST" ]; then start; else start --no-autostart; fi ;;
+  status) status ;;
+  logs) touch "$LOG"; tail -n 100 -f "$LOG" ;;
+  uninstall)
+    stop || true
+    rm -f "$AUTO_PLIST" "$MANUAL_PLIST"
+    echo "launchd agent removed. The KraBness folder ($DIR) with your data stays: delete it yourself if you don't need it."
+    ;;
+  *) sed -n '2,10p' "$0"; exit 2 ;;
+esac
